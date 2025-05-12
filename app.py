@@ -150,15 +150,13 @@ def send_wati_message(recipient, message):
         if recipient.startswith('+'):
             recipient = recipient[1:]
             
-        # FIX: Properly build the endpoint
-        # The correct format should be: {base_endpoint}/api/v1/sendSessionMessage/{recipient}
-        # Make sure we're not duplicating the account ID if it's already in the endpoint
+        # Fixed: Properly construct the endpoint URL using the WATI API documentation format
+        # The correct format according to the WATI API is:
+        # POST /api/v1/sendSessionMessage/{whatsappNumber}
         base_endpoint = WATI_API_ENDPOINT
-        
-        # Check if WATI_API_ENDPOINT already includes the account ID
         if WATI_ACCOUNT_ID not in base_endpoint:
             base_endpoint = f"{base_endpoint}/{WATI_ACCOUNT_ID}"
-            
+        
         endpoint = f"{base_endpoint}/api/v1/sendSessionMessage/{recipient}"
         
         logger.info(f"Using endpoint: {endpoint}")
@@ -168,18 +166,15 @@ def send_wati_message(recipient, message):
             "Content-Type": "application/json"
         }
         
-        # Ensure message is not empty
-        if not message or message.strip() == "":
-            message = "Hello! This is a message from Birthday Bot."
-        
+        # FIXED: The WATI API is looking for a required parameter named "text", not "message"
+        # as per the API documentation visible in your screenshot
         payload = {
-            "message": message
+            "text": message  # Changed from "message" to "text"
         }
         
         logger.info(f"Sending message to {recipient} with payload: {payload}")
         
         try:
-            # FIX: Add more robust error handling
             response = requests.post(endpoint, headers=headers, json=payload, timeout=15)
             response_text = response.text
             
@@ -190,7 +185,7 @@ def send_wati_message(recipient, message):
                 try:
                     response_json = response.json()
                     if isinstance(response_json, dict) and response_json.get("result") is False:
-                        error_msg = response_json.get("message", "Unknown API error")
+                        error_msg = response_json.get("info", "Unknown API error")
                         logger.error(f"API returned error: {error_msg}")
                         return False
                     logger.info(f"Message sent to {recipient} successfully")
@@ -271,9 +266,8 @@ def webhook():
         logger.info(f"Content type: {request.content_type}")
         logger.info(f"Raw data: {request.data.decode('utf-8') if request.data else 'No data'}")
         
-        # FIX: Better data extraction from request
+        # Extract data from request
         data = {}
-        # Try to get JSON data
         try:
             if request.content_type and 'application/json' in request.content_type:
                 data = request.json
@@ -568,8 +562,6 @@ def test_wati():
         
         test_message = "🧪 This is a test message from your Birthday Alert Bot! 🎂\n\nIf you're seeing this, your WhatsApp integration is working correctly."
         
-        # FIX: Get the API status before sending message
-        # Try a simple API call to verify connection
         logger.info(f"Testing WATI API connection for phone: {phone}")
         
         # Build the base endpoint
