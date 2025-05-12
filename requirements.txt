@@ -2,3 +2,5 @@ flask
 requests
 schedule
 gunicorn
+python-dotenv
+threading
