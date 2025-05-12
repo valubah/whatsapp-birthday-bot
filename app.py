@@ -145,12 +145,20 @@ def check_upcoming_birthdays(days_ahead=1):
 
 
 
+
+
+
+
+
+
+
 def send_wati_message(recipient, message):
     """
-    Sends a simple text (session) message using the standard WATI API endpoint.
-    Focuses on /api/v1/sendSessionMessage.
+    Sends a simple text (session) message using the WATI API structure specified
+    (whatsappNumber in path, messageText as query parameter).
     """
     try:
+        # --- Initial Checks ---
         if not WATI_ACCESS_TOKEN:
             logger.error("WATI_ACCESS_TOKEN is not configured.")
             return False
@@ -164,111 +172,118 @@ def send_wati_message(recipient, message):
             logger.error("Message content is empty.")
             return False
 
-        # Format the phone number (remove + if present)
+        # --- Prepare Request Parameters ---
         formatted_recipient = recipient
         if isinstance(recipient, str) and recipient.startswith('+'):
             formatted_recipient = recipient[1:]
-        
-        logger.info(f"Preparing to send session message to {formatted_recipient}")
-        
-        base_api_url = WATI_API_ENDPOINT.rstrip('/')
-        if WATI_ACCOUNT_ID:
-            # Ensure account ID is part of the base URL path if not already included by WATI_API_ENDPOINT
-            # This logic assumes WATI_API_ENDPOINT might or might not contain the account ID.
-            # If WATI_API_ENDPOINT is e.g. "https://server.wati.io" and ACCT_ID is "123", base_api_url becomes "https://server.wati.io/123"
-            # If WATI_API_ENDPOINT is e.g. "https://123.wati.io", this logic might be adjusted or ACCT_ID might not be needed in path.
-            # Based on your logs, "https://live-mt-server.wati.io/441044" was the effective base.
-            if WATI_ACCOUNT_ID not in base_api_url.split('/')[-2:]: # Avoid double-adding if already in WATI_API_ENDPOINT
-                 base_api_url = f"{base_api_url}/{WATI_ACCOUNT_ID}"
-        
-        # Standard WATI endpoint for sending a session message
-        session_message_endpoint = f"{base_api_url}/api/v1/sendSessionMessage"
+
+        base_api_url = WATI_API_ENDPOINT.rstrip('/') + '/' # Ensure trailing slash for urljoin
+
+        # Construct the specific endpoint path including the recipient number
+        # Path is /api/v1/sendSessionMessage/{whatsappNumber}
+        relative_path = f"api/v1/sendSessionMessage/{formatted_recipient}"
+        target_endpoint = urljoin(base_api_url, relative_path)
 
         headers = {
-            "Authorization": f"Bearer {WATI_ACCESS_TOKEN}",
-            "Content-Type": "application/json"
+            "Authorization": f"Bearer {WATI_ACCESS_TOKEN}"
+            # Content-Type might not be needed if body is empty, but can be kept
+            # "Content-Type": "application/json"
         }
 
-        payload = {
-            "whatsappNumber": formatted_recipient,
+        # Message text goes into query parameters
+        query_params = {
             "messageText": message
         }
 
-        # --- Helper function to check WATI response ---
+        # --- Helper function to check WATI response (no changes needed here) ---
         def check_wati_response(response, attempt_name="WATI API Call"):
-            # Log the raw text content, especially if it's short or empty
-            response_text_for_log = response.text
-            if not response.text.strip():
-                response_text_for_log = '(empty response body)'
-            
+            response_text_for_log = response.text if response.text and response.text.strip() else '(empty response body)'
             logger.info(f"API Response from {attempt_name} for {formatted_recipient}: Status {response.status_code}, Content: {response_text_for_log}")
 
+            # WATI documentation shows a 200 OK with a specific JSON body for success in this case
             if response.status_code == 200:
                 try:
-                    if not response.text.strip(): # Handle 200 OK with empty body
-                        logger.info(f"{attempt_name} for {formatted_recipient} returned 200 OK with empty body. Assuming success for certain POSTs if WATI confirms this behavior.")
-                        # For WATI, a 200 OK for send message usually has a body. This might be a cautious success.
-                        # Typically, one would expect a JSON body confirming the send.
-                        # If WATI sometimes returns an empty 200 on success, this is okay. Otherwise, treat as ambiguous/failure.
-                        # Let's be stricter: WATI usually confirms with JSON.
-                        logger.warning(f"{attempt_name} for {formatted_recipient} returned 200 OK with empty body. Treating as ambiguous, likely failure unless confirmed otherwise by WATI docs.")
-                        return False
+                    if not response.text.strip():
+                         logger.warning(f"{attempt_name} for {formatted_recipient} returned 200 OK with empty body. Expected JSON success body, treating as failure.")
+                         return False # WATI spec shows non-empty success body
 
                     data = response.json()
                     if isinstance(data, dict):
-                        if data.get("result") is True:
-                            logger.info(f"Message sent successfully via {attempt_name} to {formatted_recipient}: {response.text}")
+                        # Check for specific success fields shown in WATI docs for this endpoint
+                        if data.get("result") == "success" and data.get("ok") is True and "message" in data:
+                            logger.info(f"Message sent successfully via {attempt_name} to {formatted_recipient}: ID {data['message'].get('whatsappMessageId') or data['message'].get('id')}")
                             return True
-                        # Some WATI responses might use 'id' and 'status' for successful queueing/submission
+                        # Handle other potential WATI success formats if observed
                         elif data.get("id") and data.get("status") in ["submitted", "sent", "OK", "queued", "success"]:
                              logger.info(f"Message acknowledged (likely success) via {attempt_name} to {formatted_recipient}: {response.text}")
                              return True
                         elif data.get("result") is False:
                             logger.error(f"{attempt_name} indicated failure for {formatted_recipient}: {data.get('info', response.text)}")
                             return False
-                        # Check for other common error indicators if "result" is not present or not boolean false
                         elif "fault" in data or "error" in data or data.get("status") == "error":
                              logger.error(f"{attempt_name} failed for {formatted_recipient} (JSON error fields): {response.text}")
                              return False
-                        else: # Ambiguous 200 OK JSON (e.g., no "result", "id/status", or known error fields)
-                            logger.warning(f"{attempt_name} for {formatted_recipient} returned 200 OK with ambiguous JSON (treating as failure): {response.text}")
+                        else:
+                            logger.warning(f"{attempt_name} for {formatted_recipient} returned 200 OK with unexpected JSON structure (treating as failure): {response.text}")
                             return False
-                    else: # Non-dict JSON payload (should not happen with WATI normally)
+                    else:
                         logger.warning(f"{attempt_name} for {formatted_recipient} returned 200 OK with non-dict JSON (treating as failure): {response.text}")
                         return False
-                except ValueError: # JSONDecodeError (if response.text is not valid JSON)
-                    logger.warning(f"{attempt_name} for {formatted_recipient} returned 200 OK but with non-JSON content (treating as failure): {response.text_for_log}")
+                except ValueError: # JSONDecodeError
+                    logger.warning(f"{attempt_name} for {formatted_recipient} returned 200 OK but with non-JSON content (treating as failure): {response_text_for_log}")
                     return False
             elif response.status_code == 202: # Accepted for processing
                 logger.info(f"Message accepted for processing via {attempt_name} for {formatted_recipient} (HTTP 202): {response_text_for_log}")
-                return True
-            else: # Other HTTP error codes (400, 401, 403, 404, 5xx etc.)
+                return True # Assume success if WATI uses 202 for this call sometimes
+            else: # Other HTTP error codes
                 logger.error(f"{attempt_name} failed for {formatted_recipient} with HTTP status {response.status_code}: {response_text_for_log}")
+                if response.status_code == 404:
+                    logger.critical(f"Received 404 NOT FOUND for endpoint {target_endpoint}. Please double-check the base URL and endpoint path structure with WATI support.")
+                elif response.status_code == 400:
+                     logger.error(f"Received 400 BAD REQUEST. Check formatting of recipient number in URL ({formatted_recipient}) and messageText query parameter.")
+                elif response.status_code in [401, 403]:
+                     logger.error(f"Received {response.status_code} Unauthorized/Forbidden. Check WATI_ACCESS_TOKEN validity and permissions.")
                 return False
-        
-        # --- Single attempt to send session message ---
-        logger.info(f"Attempting to send session message to endpoint: {session_message_endpoint}")
-        logger.info(f"Payload: {json.dumps(payload)}")
+
+        # --- Make the API Call ---
+        logger.info(f"Attempting to send session message via POST to: {target_endpoint}")
+        logger.info(f"Query Parameters: {query_params}")
 
         try:
-            response = requests.post(session_message_endpoint, headers=headers, json=payload, timeout=20) # Increased timeout slightly
-            if check_wati_response(response, "V1 sendSessionMessage"):
+            # Use POST, pass query parameters via 'params', send NO JSON body (data=None)
+            response = requests.post(
+                target_endpoint,
+                headers=headers,
+                params=query_params,
+                data=None, # Explicitly no request body
+                timeout=20
+            )
+
+            # Check response using the helper function
+            if check_wati_response(response, "WATI sendSessionMessage (Path Param Method)"):
                 return True
             else:
-                # The check_wati_response function already logs the detailed error.
-                logger.error(f"V1 sendSessionMessage attempt failed for {formatted_recipient}.")
+                logger.error(f"WATI sendSessionMessage attempt failed for {formatted_recipient}.")
                 return False
         except requests.exceptions.Timeout:
-            logger.error(f"Request to WATI API timed out for {formatted_recipient} at {session_message_endpoint}.")
+            logger.error(f"Request to WATI API timed out for {formatted_recipient} at {target_endpoint}.")
             return False
         except requests.exceptions.RequestException as e:
-            logger.error(f"Request exception during V1 sendSessionMessage for {formatted_recipient} to {session_message_endpoint}: {e}")
+            logger.error(f"Request exception during WATI Send Message for {formatted_recipient} to {target_endpoint}: {e}")
             return False
 
     except Exception as e:
-        # Catch any other unexpected errors in the function setup.
         logger.error(f"Unhandled exception in send_wati_message for recipient {recipient}: {str(e)}", exc_info=True)
         return False
+
+
+
+
+
+
+
+
+
 
 
 
