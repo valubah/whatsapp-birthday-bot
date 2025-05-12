@@ -143,7 +143,7 @@ def check_upcoming_birthdays(days_ahead=1):
 
 
 def send_wati_message(recipient, message):
-    """Send WhatsApp message using WATI API with detailed debug information"""
+    """Send WhatsApp message using WATI API with correct API version and format"""
     try:
         if not WATI_ACCESS_TOKEN:
             logger.error("WATI credentials not configured")
@@ -153,104 +153,108 @@ def send_wati_message(recipient, message):
         if recipient.startswith('+'):
             recipient = recipient[1:]
             
-        logger.info(f"[TEST] Raw recipient: {recipient}")
-        logger.info(f"[TEST] Raw message: {message}")
-        logger.info(f"[TEST] WATI_API_ENDPOINT: {WATI_API_ENDPOINT}")
-        logger.info(f"[TEST] WATI_ACCOUNT_ID: {WATI_ACCOUNT_ID}")
+        logger.info(f"Sending message to {recipient}")
         
-        # Properly construct the endpoint URL based on the WATI API documentation
+        # Properly construct the endpoint URL
         base_endpoint = WATI_API_ENDPOINT
         if WATI_ACCOUNT_ID not in base_endpoint:
             base_endpoint = f"{base_endpoint}/{WATI_ACCOUNT_ID}"
         
-        endpoint = f"{base_endpoint}/api/v1/sendSessionMessage/{recipient}"
+        # Let's use the v2 endpoint which might be more reliable
+        endpoint = f"{base_endpoint}/api/v2/send-message"
         
-        logger.info(f"[TEST] Final endpoint: {endpoint}")
-            
         headers = {
             "Authorization": f"Bearer {WATI_ACCESS_TOKEN}",
             "Content-Type": "application/json"
         }
         
-        logger.info(f"[TEST] Headers (token redacted): {{'Authorization': 'Bearer ***', 'Content-Type': {headers['Content-Type']}}}")
-        
-        # Try multiple parameter variations to see which one works
-        # First try with "text" parameter
-        payload_text = {
-            "text": "TEST MESSAGE 1: Using 'text' parameter - This is a test message from Birthday Bot."
+        # V2 API format with proper parameters
+        payload = {
+            "whatsappNumber": recipient,
+            "message": message
         }
         
-        logger.info(f"[TEST] Sending payload with 'text' parameter: {payload_text}")
+        response = requests.post(endpoint, headers=headers, json=payload, timeout=15)
         
-        response = requests.post(endpoint, headers=headers, json=payload_text, timeout=15)
-        logger.info(f"[TEST] Response (text param): Status {response.status_code}, Content: {response.text}")
+        # If v2 endpoint fails, try the v1 endpoint with proper format
+        if response.status_code != 200 or "error" in response.text.lower():
+            logger.warning(f"V2 endpoint failed: {response.text}. Trying V1 endpoint...")
+            
+            # Use the v1 endpoint with different payload structure
+            endpoint_v1 = f"{base_endpoint}/api/v1/sendMessage"
+            
+            payload_v1 = {
+                "phone": recipient,
+                "messageText": message
+            }
+            
+            response = requests.post(endpoint_v1, headers=headers, json=payload_v1, timeout=15)
+            
+            # Try another payload format if first attempt fails
+            if response.status_code != 200 or "error" in response.text.lower():
+                endpoint_v1_alt = f"{base_endpoint}/api/v1/sendTemplateMessage"
+                
+                payload_v1_alt = {
+                    "phoneNumber": recipient,
+                    "template": {
+                        "name": "general_notification",  # Use a template that exists in your account
+                        "language": {
+                            "code": "en"
+                        },
+                        "components": [
+                            {
+                                "type": "body",
+                                "parameters": [
+                                    {
+                                        "type": "text",
+                                        "text": message
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+                
+                response = requests.post(endpoint_v1_alt, headers=headers, json=payload_v1_alt, timeout=15)
         
-        # Try with "messageText" parameter
-        payload_messageText = {
-            "messageText": "TEST MESSAGE 2: Using 'messageText' parameter - This is a test message from Birthday Bot."
-        }
+        # Log full response for debugging
+        logger.info(f"API Response: Status {response.status_code}, Content: {response.text}")
         
-        logger.info(f"[TEST] Sending payload with 'messageText' parameter: {payload_messageText}")
-        
-        response2 = requests.post(endpoint, headers=headers, json=payload_messageText, timeout=15)
-        logger.info(f"[TEST] Response (messageText param): Status {response2.status_code}, Content: {response2.text}")
-        
-        # Try with "message" parameter
-        payload_message = {
-            "message": "TEST MESSAGE 3: Using 'message' parameter - This is a test message from Birthday Bot."
-        }
-        
-        logger.info(f"[TEST] Sending payload with 'message' parameter: {payload_message}")
-        
-        response3 = requests.post(endpoint, headers=headers, json=payload_message, timeout=15)
-        logger.info(f"[TEST] Response (message param): Status {response3.status_code}, Content: {response3.text}")
-        
-        # Try with standard named parameters in body
-        payload_complete = {
-            "text": "TEST MESSAGE 4: Using multiple parameters - This is a test message from Birthday Bot.",
-            "messageText": "TEST MESSAGE 4: Using multiple parameters - This is a test message from Birthday Bot.",
-            "message": "TEST MESSAGE 4: Using multiple parameters - This is a test message from Birthday Bot."
-        }
-        
-        logger.info(f"[TEST] Sending payload with all parameters: {payload_complete}")
-        
-        response4 = requests.post(endpoint, headers=headers, json=payload_complete, timeout=15)
-        logger.info(f"[TEST] Response (all params): Status {response4.status_code}, Content: {response4.text}")
-        
-        # Now try to send the actual message
-        payload_original = {
-            "text": message  # Using "text" parameter based on previous info
-        }
-        
-        logger.info(f"[TEST] Sending original message with 'text' parameter: {payload_original}")
-        
-        response_original = requests.post(endpoint, headers=headers, json=payload_original, timeout=15)
-        logger.info(f"[TEST] Response (original message): Status {response_original.status_code}, Content: {response_original.text}")
-        
-        # Check which responses were successful
-        successful_params = []
-        if "result" in response.text and "false" not in response.text.lower():
-            successful_params.append("text")
-        if "result" in response2.text and "false" not in response2.text.lower():
-            successful_params.append("messageText")
-        if "result" in response3.text and "false" not in response3.text.lower():
-            successful_params.append("message")
-        if "result" in response4.text and "false" not in response4.text.lower():
-            successful_params.append("multiple parameters")
-        
-        logger.info(f"[TEST] Successful parameter formats: {successful_params if successful_params else 'None'}")
-        
-        # Check if original message was successful
-        if "result" in response_original.text and "false" not in response_original.text.lower():
-            logger.info("[TEST] Original message sent successfully!")
+        # Check if the response indicates success
+        if response.status_code == 200 and "error" not in response.text.lower():
+            logger.info(f"Message sent successfully to {recipient}")
             return True
         else:
-            logger.error(f"[TEST] Original message failed: {response_original.text}")
-            return False
+            logger.error(f"Failed to send message: {response.text}")
+            
+            # As a last attempt, try the direct text message endpoint
+            endpoint_final = f"{base_endpoint}/api/v1/sendTemplateMessage/{recipient}"
+            
+            # Use a simpler payload that might work with older WATI versions
+            payload_final = {
+                "template_name": "birthday_alert",
+                "broadcast_name": "birthday_reminder",
+                "parameters": [
+                    {
+                        "name": "1",
+                        "value": message
+                    }
+                ]
+            }
+            
+            final_response = requests.post(endpoint_final, headers=headers, json=payload_final, timeout=15)
+            logger.info(f"Final attempt response: {final_response.text}")
+            
+            if final_response.status_code == 200 and "error" not in final_response.text.lower():
+                logger.info(f"Message sent successfully on final attempt to {recipient}")
+                return True
                 
+            return False
     except Exception as e:
-        logger.error(f"[TEST] Error in test send_wati_message: {e}", exc_info=True)
+        logger.error(f"Error sending message: {str(e)}", exc_info=True)
         return False
+
+
 
 
 
