@@ -5,6 +5,7 @@ import schedule
 import logging
 import threading
 import random
+import traceback
 import requests
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
@@ -21,26 +22,23 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 # Load environment variables for WATI
-WATI_ACCESS_TOKEN = os.environ.get('WATI_ACCESS_TOKEN')
-WATI_API_ENDPOINT = os.environ.get('WATI_API_ENDPOINT')
-WHATSAPP_NUMBER = os.environ.get('WHATSAPP_NUMBER')
-OWNER_PHONE = os.environ.get('OWNER_PHONE', '')  # Default to empty string if not set
+# Added more robust environment variable loading with defaults
+WATI_ACCESS_TOKEN = os.getenv('WATI_ACCESS_TOKEN', '')
+WATI_API_ENDPOINT = os.getenv('WATI_API_ENDPOINT', '')
+WHATSAPP_NUMBER = os.getenv('WHATSAPP_NUMBER', '')
+OWNER_PHONE = os.getenv('OWNER_PHONE', '')
 
-# Storage for birthdays (In a production environment, use a database)
-DATA_FILE = "birthdays.json"
+DATA_FILE = "/tmp/birthdays.json"  # Use /tmp for better compatibility
 
-# Advertorial messages collection
+# Global scheduler thread
+scheduler_thread = None
+
+# Advertorial messages (kept from original code)
 ADVERTORIALS = [
     "🎁 *Send a perfect gift!* Try GiftWizard - personalized gift recommendations for any occasion. Use code BDAY10 for 10% off your first purchase.",
-    
     "🎂 *Planning a party?* CelebrationHub has everything you need for the perfect birthday celebration. Visit celebrationhub.com today!",
-    
     "🎈 *Make memories last!* Use PhotoMemories app to create stunning birthday photo albums. Download now and get 50 free prints.",
-    
     "🎊 *Need a last-minute gift?* E-GiftCards delivers instant gift cards from 500+ brands. Perfect for those forgotten birthdays!",
-    
-
-  
 ]
 
 def get_random_ad():
@@ -48,26 +46,34 @@ def get_random_ad():
     return random.choice(ADVERTORIALS)
 
 def load_birthdays():
-    """Load birthdays from JSON file"""
+    """Load birthdays from JSON file with enhanced error handling"""
     try:
+        # Ensure the directory exists
+        os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
+        
         if os.path.exists(DATA_FILE):
             with open(DATA_FILE, 'r') as f:
                 return json.load(f)
         else:
-            return {"personal": {}, "groups": {}}
+            default_data = {"personal": {}, "groups": {}}
+            save_birthdays(default_data)
+            return default_data
     except Exception as e:
         logger.error(f"Error loading birthdays: {e}")
+        logger.error(traceback.format_exc())
         return {"personal": {}, "groups": {}}
 
+
 def save_birthdays(data):
-    """Save birthdays to JSON file"""
+    """Save birthdays to JSON file with enhanced logging"""
     try:
         with open(DATA_FILE, 'w') as f:
             json.dump(data, f, indent=4)
-        logger.info("Birthdays saved successfully")
+        logger.info(f"Birthdays saved successfully to {DATA_FILE}")
         return True
     except Exception as e:
         logger.error(f"Error saving birthdays: {e}")
+        logger.error(traceback.format_exc())
         return False
 
 def parse_date(date_str):
@@ -145,50 +151,42 @@ def check_upcoming_birthdays(days_ahead=1):
         return []
 
 def send_wati_message(recipient, message):
-    """Send WhatsApp message using WATI API"""
+    """Enhanced WATI message sending with comprehensive logging"""
     try:
+        # Validate credentials
         if not WATI_ACCESS_TOKEN or not WATI_API_ENDPOINT:
-            logger.error("WATI credentials not configured")
+            logger.error("WATI credentials not fully configured")
             return False
 
-        # Format the phone number (remove + if present)
-        if recipient.startswith('+'):
-            recipient = recipient[1:]
-            
-        # Extract the API endpoint ID number from the full URL
-        # For example, extract "441044" from "https://live-mt-server.wati.io/441044/api/v1/sendSessionMessage/"
-        endpoint_id = None
-        if WATI_API_ENDPOINT:
-            parts = WATI_API_ENDPOINT.split('/')
-            for part in parts:
-                if part.isdigit():
-                    endpoint_id = part
-                    break
+        # Normalize phone number
+        recipient = recipient.lstrip('+')
         
-        # If we couldn't extract the ID, use the full endpoint
-        if endpoint_id:
-            endpoint = f"https://live-mt-server.wati.io/{endpoint_id}/api/v1/sendSessionMessage/{recipient}"
-        else:
-            endpoint = f"{WATI_API_ENDPOINT}/api/v1/sendSessionMessage/{recipient}"
+        # Use full URL or construct it
+        endpoint = WATI_API_ENDPOINT.rstrip('/') + f"/api/v1/sendSessionMessage/{recipient}"
         
-        logger.info(f"Using endpoint: {endpoint}")
-            
+        logger.info(f"Sending message to {recipient}")
+        logger.info(f"Endpoint: {endpoint}")
+        
         headers = {
             "Authorization": f"Bearer {WATI_ACCESS_TOKEN}",
             "Content-Type": "application/json"
         }
         
-        payload = {
-            "message": message
-        }
+        payload = {"message": message}
         
-        # Add proxy handling and error catching
         try:
-            # Try without proxies first
-            response = requests.post(endpoint, headers=headers, json=payload, timeout=10, proxies={})
+            response = requests.post(
+                endpoint, 
+                headers=headers, 
+                json=payload, 
+                timeout=10
+            )
+            
+            logger.info(f"WATI Response Status: {response.status_code}")
+            logger.info(f"WATI Response Text: {response.text}")
             
             if response.status_code == 200:
-                logger.info(f"Message sent to {recipient} successfully")
+                logger.info(f"Message sent successfully to {recipient}")
                 return True
             else:
                 logger.error(f"Failed to send message: {response.status_code} - {response.text}")
@@ -196,64 +194,117 @@ def send_wati_message(recipient, message):
                 
         except requests.exceptions.RequestException as req_err:
             logger.error(f"Request error sending message: {req_err}")
-            # Try one more time with default proxy settings
-            try:
-                response = requests.post(endpoint, headers=headers, json=payload, timeout=15)
-                
-                if response.status_code == 200:
-                    logger.info(f"Message sent to {recipient} successfully (second attempt)")
-                    return True
-                else:
-                    logger.error(f"Failed to send message (second attempt): {response.status_code} - {response.text}")
-                    return False
-            except Exception as e2:
-                logger.error(f"Error in second attempt: {e2}")
-                return False
+            logger.error(traceback.format_exc())
+            return False
             
     except Exception as e:
-        logger.error(f"Error sending message via WATI: {e}")
+        logger.error(f"Unexpected error in send_wati_message: {e}")
+        logger.error(traceback.format_exc())
         return False
 
+
+
 def daily_check():
-    """Daily check for birthdays and send reminders"""
+    """Daily birthday check with comprehensive logging"""
     try:
-        logger.info("Running daily birthday check...")
+        logger.info("🕒 Running daily birthday check...")
         upcoming = check_upcoming_birthdays(days_ahead=1)
-        birthdays = load_birthdays()
-
+        logger.info(f"Found {len(upcoming)} upcoming birthdays")
+        
         for person in upcoming:
-            if "group_id" in person:
-                # Send to group
-                group_id = person["group_id"]
-                group_info = birthdays["groups"][group_id]
-                message = f"🎂 Reminder: {person['name']}'s birthday is tomorrow! 🎉\n\n{get_random_ad()}"        
-                send_wati_message(group_info["phone"], message)
-            else:
-                # Send to individual
-                message = f"🎂 Birthday Reminder: {person['name']}'s birthday is tomorrow! 🎉\n\n{get_random_ad()}"
-                if OWNER_PHONE:
-                    send_wati_message(OWNER_PHONE, message)
-
-        logger.info(f"Daily check completed, found {len(upcoming)} upcoming birthdays")
+            try:
+                if "group_id" in person:
+                    # Group birthday logic
+                    message = f"🎂 Reminder: {person['name']}'s birthday is tomorrow! 🎉\n\n{get_random_ad()}"
+                else:
+                    # Personal birthday logic
+                    message = f"🎂 Birthday Reminder: {person['name']}'s birthday is tomorrow! 🎉\n\n{get_random_ad()}"
+                
+                # Send to owner phone or group
+                recipient = person.get('phone', OWNER_PHONE)
+                if recipient:
+                    send_wati_message(recipient, message)
+                else:
+                    logger.warning(f"No recipient found for {person['name']}'s birthday")
+                
+            except Exception as person_err:
+                logger.error(f"Error processing {person['name']}'s birthday: {person_err}")
+        
+        logger.info("Daily birthday check completed")
     except Exception as e:
-        logger.error(f"Error in daily check: {e}")
+        logger.error(f"Critical error in daily check: {e}")
+        logger.error(traceback.format_exc())
 
-# Schedule daily check at 9 AM
-schedule.every().day.at("09:00").do(daily_check)
+
+
+
 
 def run_scheduler():
-    """Run the scheduler in a separate thread"""
+    """Run the scheduler in a separate thread with enhanced error handling"""
     while True:
-        schedule.run_pending()
-        time.sleep(60)  # Check every minute
-
-# Start the scheduler in a separate thread
-scheduler_thread = None
+        try:
+            schedule.run_pending()
+            time.sleep(60)  # Check every minute
+        except Exception as e:
+            logger.error(f"Scheduler error: {e}")
+            logger.error(traceback.format_exc())
+            time.sleep(60)  # Prevent tight error loop
 
 @app.route('/')
 def home():
-    """Homepage route"""
-    return 'Birthday Bot is running!'
+    """Enhanced home route with system information"""
+    return jsonify({
+        "status": "Birthday Bot is running",
+        "timestamp": datetime.now().isoformat(),
+        "config": {
+            "wati_endpoint_configured": bool(WATI_API_ENDPOINT),
+            "wati_token_configured": bool(WATI_ACCESS_TOKEN),
+            "birthdays_file": DATA_FILE,
+            "birthdays_count": {
+                "personal": len(load_birthdays().get("personal", {})),
+                "groups": len(load_birthdays().get("groups", {}))
+            }
+        }
+    })
+
+def main():
+    """Main function to set up and start the application"""
+    try:
+        # Logging environment details for debugging
+        logger.info("🚀 Starting Birthday Bot")
+        logger.info(f"WATI Endpoint: {WATI_API_ENDPOINT}")
+        logger.info(f"Data File: {DATA_FILE}")
+        
+        # Ensure data file exists
+        if not os.path.exists(DATA_FILE):
+            save_birthdays({"personal": {}, "groups": {}})
+        
+        # Schedule daily check at 9 AM
+        schedule.every().day.at("09:00").do(daily_check)
+        
+        # Start scheduler in a daemon thread
+        global scheduler_thread
+        scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
+        scheduler_thread.start()
+        
+        logger.info("Scheduler thread started successfully")
+        
+    except Exception as e:
+        logger.error(f"Error in main setup: {e}")
+        logger.error(traceback.format_exc())
+
+if __name__ == '__main__':
+    # Initialize the application
+    main()
+    
+    # Run Flask
+    port = int(os.getenv('PORT', 8000))
+    app.run(host='0.0.0.0', port=port, debug=True)
+else:
+    # For WSGI servers
+    main()
+
+
 
 @app.route('/health')
 def health():
