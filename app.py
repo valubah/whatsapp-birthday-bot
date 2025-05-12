@@ -139,6 +139,9 @@ def check_upcoming_birthdays(days_ahead=1):
         logger.error(f"Error checking upcoming birthdays: {e}")
         return []
 
+
+
+
 def send_wati_message(recipient, message):
     """Send WhatsApp message using WATI API"""
     try:
@@ -151,8 +154,11 @@ def send_wati_message(recipient, message):
             recipient = recipient[1:]
             
         # Properly construct the endpoint URL based on the WATI API documentation
-        # The correct format is: POST /{tenantId}/api/v1/sendSessionMessage/{whatsappNumber}
-        endpoint = f"{WATI_API_ENDPOINT}/api/v1/sendSessionMessage/{recipient}"
+        base_endpoint = WATI_API_ENDPOINT
+        if WATI_ACCOUNT_ID not in base_endpoint:
+            base_endpoint = f"{base_endpoint}/{WATI_ACCOUNT_ID}"
+        
+        endpoint = f"{base_endpoint}/api/v1/sendSessionMessage/{recipient}"
         
         logger.info(f"Using endpoint: {endpoint}")
             
@@ -161,9 +167,9 @@ def send_wati_message(recipient, message):
             "Content-Type": "application/json"
         }
         
-        # The WATI API expects "messageText" parameter, not "text"
+        # Based on the error message, the API expects "text" parameter
         payload = {
-            "messageText": message
+            "text": message  # Using "text" parameter as indicated by the error message
         }
         
         logger.info(f"Sending message to {recipient} with payload: {payload}")
@@ -191,6 +197,8 @@ def send_wati_message(recipient, message):
     except Exception as e:
         logger.error(f"Error sending message via WATI: {e}")
         return False
+
+
 
 
 
