@@ -142,6 +142,9 @@ def check_upcoming_birthdays(days_ahead=1):
 
 
 
+
+
+
 def send_wati_message(recipient, message):
     """Send WhatsApp message using WATI API with correct API version and format"""
     try:
@@ -155,105 +158,152 @@ def send_wati_message(recipient, message):
             
         logger.info(f"Sending message to {recipient}")
         
-        # Properly construct the endpoint URL
-        base_endpoint = WATI_API_ENDPOINT
-        if WATI_ACCOUNT_ID not in base_endpoint:
-            base_endpoint = f"{base_endpoint}/{WATI_ACCOUNT_ID}"
-        
-        # Let's use the v2 endpoint which might be more reliable
-        endpoint = f"{base_endpoint}/api/v2/send-message"
-        
+        base_api_url = WATI_API_ENDPOINT
+        # Ensure account ID is part of the base URL if not already included
+        if WATI_ACCOUNT_ID and WATI_ACCOUNT_ID not in base_api_url.split('/')[-2:]: # check last two path segments
+             base_api_url = f"{base_api_url.rstrip('/')}/{WATI_ACCOUNT_ID}"
+        else:
+            base_api_url = base_api_url.rstrip('/')
+
+
         headers = {
             "Authorization": f"Bearer {WATI_ACCESS_TOKEN}",
             "Content-Type": "application/json"
         }
+
+        # --- Helper function to check WATI response ---
+        def check_wati_response(response, attempt_name):
+            logger.info(f"API Response from {attempt_name} for {recipient}: Status {response.status_code}, Content: {response.text}")
+            if response.status_code == 200:
+                try:
+                    data = response.json()
+                    if isinstance(data, dict):
+                        if data.get("result") is True:
+                            logger.info(f"Message sent successfully via {attempt_name} to {recipient}")
+                            return True
+                        # Handle cases like {"id": "...", "status": "submitted/sent"} for some template sends
+                        elif data.get("id") and data.get("status") in ["submitted", "sent", "OK"]:
+                             logger.info(f"Message acknowledged (likely success) via {attempt_name} to {recipient}: {response.text}")
+                             return True
+                        elif data.get("result") is False:
+                            logger.error(f"{attempt_name} indicated failure for {recipient}: {data.get('info', response.text)}")
+                            return False
+                        # If no 'result' field, but other error indicators might be present
+                        elif "fault" in data or "error" in data:
+                             logger.error(f"{attempt_name} failed for {recipient} (JSON error fields): {response.text}")
+                             return False
+                        # If 200 OK, JSON, but no clear success/failure, log and treat as failure for now
+                        else:
+                            logger.warning(f"{attempt_name} for {recipient} returned 200 OK with ambiguous JSON (assuming failure): {response.text}")
+                            return False
+                    else: # Not a dictionary
+                        logger.warning(f"{attempt_name} for {recipient} returned 200 OK with non-dict JSON (assuming failure): {response.text}")
+                        return False
+                except ValueError: # Not JSON
+                    # If it's not JSON but 200 OK, and no "error" text, it's highly ambiguous for WATI.
+                    if "error" not in response.text.lower() and "fault" not in response.text.lower():
+                        logger.info(f"{attempt_name} for {recipient} returned 200 OK with non-JSON (assuming success cautiously): {response.text}")
+                        # This is a risky assumption for WATI; typically expects JSON.
+                        # Only return True if you know WATI sometimes sends plain text success for this endpoint.
+                        # For safety, let's assume failure if not specific JSON success.
+                        logger.warning(f"{attempt_name} for {recipient} returned 200 OK with non-JSON (treating as failure): {response.text}")
+                        return False
+                    else:
+                        logger.error(f"{attempt_name} failed for {recipient} (200 OK, non-JSON with error text): {response.text}")
+                        return False
+            else: # HTTP status code is not 200
+                logger.error(f"{attempt_name} failed for {recipient} with HTTP status {response.status_code}: {response.text}")
+                return False
         
-        # V2 API format with proper parameters
-        payload = {
+        # --- Attempt 1: V2 send-message ---
+        v2_endpoint = f"{base_api_url}/api/v2/send-message"
+        v2_payload = {
             "whatsappNumber": recipient,
-            "message": message
+            "message": message  # Assuming this is a simple text message. For templates, V2 has different structure.
         }
-        
-        response = requests.post(endpoint, headers=headers, json=payload, timeout=15)
-        
-        # If v2 endpoint fails, try the v1 endpoint with proper format
-        if response.status_code != 200 or "error" in response.text.lower():
-            logger.warning(f"V2 endpoint failed: {response.text}. Trying V1 endpoint...")
-            
-            # Use the v1 endpoint with different payload structure
-            endpoint_v1 = f"{base_endpoint}/api/v1/sendMessage"
-            
-            payload_v1 = {
-                "phone": recipient,
-                "messageText": message
-            }
-            
-            response = requests.post(endpoint_v1, headers=headers, json=payload_v1, timeout=15)
-            
-            # Try another payload format if first attempt fails
-            if response.status_code != 200 or "error" in response.text.lower():
-                endpoint_v1_alt = f"{base_endpoint}/api/v1/sendTemplateMessage"
-                
-                payload_v1_alt = {
-                    "phoneNumber": recipient,
-                    "template": {
-                        "name": "general_notification",  # Use a template that exists in your account
-                        "language": {
-                            "code": "en"
-                        },
-                        "components": [
-                            {
-                                "type": "body",
-                                "parameters": [
-                                    {
-                                        "type": "text",
-                                        "text": message
-                                    }
-                                ]
-                            }
-                        ]
-                    }
-                }
-                
-                response = requests.post(endpoint_v1_alt, headers=headers, json=payload_v1_alt, timeout=15)
-        
-        # Log full response for debugging
-        logger.info(f"API Response: Status {response.status_code}, Content: {response.text}")
-        
-        # Check if the response indicates success
-        if response.status_code == 200 and "error" not in response.text.lower():
-            logger.info(f"Message sent successfully to {recipient}")
-            return True
-        else:
-            logger.error(f"Failed to send message: {response.text}")
-            
-            # As a last attempt, try the direct text message endpoint
-            endpoint_final = f"{base_endpoint}/api/v1/sendTemplateMessage/{recipient}"
-            
-            # Use a simpler payload that might work with older WATI versions
-            payload_final = {
-                "template_name": "birthday_alert",
-                "broadcast_name": "birthday_reminder",
-                "parameters": [
+        try:
+            response_v2 = requests.post(v2_endpoint, headers=headers, json=v2_payload, timeout=15)
+            if check_wati_response(response_v2, "V2 send-message"):
+                return True
+        except requests.exceptions.RequestException as e:
+            logger.error(f"V2 send-message request exception for {recipient}: {e}")
+        logger.warning(f"V2 send-message failed for {recipient}. Trying V1 sendMessage...")
+
+        # --- Attempt 2: V1 sendMessage ---
+        # This is where the original log showed the "Whatsapp number should not be null or empty" error.
+        # The key change is from "phone" to "whatsappNumber".
+        v1_send_msg_endpoint = f"{base_api_url}/api/v1/sendMessage"
+        v1_send_msg_payload = {
+            "whatsappNumber": recipient, # MODIFIED: Was "phone"
+            "messageText": message
+        }
+        try:
+            response_v1_send_msg = requests.post(v1_send_msg_endpoint, headers=headers, json=v1_send_msg_payload, timeout=15)
+            if check_wati_response(response_v1_send_msg, "V1 sendMessage"):
+                return True
+        except requests.exceptions.RequestException as e:
+            logger.error(f"V1 sendMessage request exception for {recipient}: {e}")
+        logger.warning(f"V1 sendMessage failed for {recipient}. Trying V1 sendTemplateMessage (general_notification)...")
+
+        # --- Attempt 3: V1 sendTemplateMessage (using 'template' object style, e.g., for 'general_notification') ---
+        v1_template_endpoint = f"{base_api_url}/api/v1/sendTemplateMessage"
+        # This payload structure is for a template that expects the message in the body component.
+        # Ensure "general_notification" template is configured in WATI to accept such parameters.
+        v1_template_payload_general = {
+            "phoneNumber": recipient, # This style often uses "phoneNumber"
+            "template": {
+                "name": "general_notification", # Ensure this template exists in your WATI account
+                "language": {"code": "en"}, # Or your template's language
+                "components": [
                     {
-                        "name": "1",
-                        "value": message
+                        "type": "body",
+                        "parameters": [{"type": "text", "text": message}]
                     }
                 ]
             }
-            
-            final_response = requests.post(endpoint_final, headers=headers, json=payload_final, timeout=15)
-            logger.info(f"Final attempt response: {final_response.text}")
-            
-            if final_response.status_code == 200 and "error" not in final_response.text.lower():
-                logger.info(f"Message sent successfully on final attempt to {recipient}")
+        }
+        try:
+            response_v1_template_general = requests.post(v1_template_endpoint, headers=headers, json=v1_template_payload_general, timeout=15)
+            if check_wati_response(response_v1_template_general, "V1 sendTemplateMessage (general_notification)"):
                 return True
-                
-            return False
-    except Exception as e:
-        logger.error(f"Error sending message: {str(e)}", exc_info=True)
+        except requests.exceptions.RequestException as e:
+            logger.error(f"V1 sendTemplateMessage (general_notification) request exception for {recipient}: {e}")
+        logger.warning(f"V1 sendTemplateMessage (general_notification) failed for {recipient}. Trying V1 sendTemplateMessage (birthday_alert)...")
+        
+        # --- Attempt 4: V1 sendTemplateMessage (using 'template_name' and 'parameters' style, e.g., for 'birthday_alert') ---
+        # This was the "final attempt" structure in your original code.
+        # The endpoint `.../sendTemplateMessage/{recipient}` is less common; usually, recipient is in payload.
+        # If that endpoint is specific to your WATI setup, keep it. Otherwise, use standard `v1_template_endpoint`.
+        
+        # Option A: Recipient in URL (as per original final attempt)
+        # v1_template_bday_endpoint = f"{base_api_url}/api/v1/sendTemplateMessage/{recipient}"
+        # Option B: Recipient in payload (more standard)
+        v1_template_bday_endpoint = v1_template_endpoint # Reuse standard endpoint: f"{base_api_url}/api/v1/sendTemplateMessage"
+
+        v1_template_payload_bday = {
+            "template_name": "birthday_alert", # Ensure this template exists
+            "broadcast_name": "birthday_reminder_wati_sdk", # Can be any descriptive name
+             # Parameters often need to be a JSON string, or a list if the API handles it.
+             # If template {{1}} expects the message:
+            "parameters": json.dumps([{"name": "1", "value": message}]), # or [{"name":"body_param", "value":message}] if template expects named param
+        }
+        # If using Option B (recipient in payload), add it here:
+        if v1_template_bday_endpoint == v1_template_endpoint: # i.e. standard endpoint
+            v1_template_payload_bday["receiverPhoneNumber"] = recipient # or "receiver", "whatsappNumber" depending on WATI's spec for this call
+
+        try:
+            response_v1_template_bday = requests.post(v1_template_bday_endpoint, headers=headers, json=v1_template_payload_bday, timeout=15)
+            if check_wati_response(response_v1_template_bday, "V1 sendTemplateMessage (birthday_alert)"):
+                return True
+        except requests.exceptions.RequestException as e:
+            logger.error(f"V1 sendTemplateMessage (birthday_alert) request exception for {recipient}: {e}")
+
+        logger.error(f"All WATI send attempts failed for {recipient}.")
         return False
 
+    except Exception as e:
+        logger.error(f"Unhandled exception in send_wati_message for {recipient}: {str(e)}", exc_info=True)
+        return False
 
 
 
