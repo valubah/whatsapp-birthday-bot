@@ -26,6 +26,9 @@ WATI_API_ENDPOINT = os.environ.get('WATI_API_ENDPOINT', 'https://live-mt-server.
 WHATSAPP_NUMBER = os.environ.get('WHATSAPP_NUMBER')
 OWNER_PHONE = os.environ.get('OWNER_PHONE', '')  # Default to empty string if not set
 
+# WATI API Constants
+WATI_ACCOUNT_ID = "441044"  # Based on your logs, this seems to be your account ID
+
 # Storage for birthdays (In a production environment, use a database)
 DATA_FILE = "birthdays.json"
 
@@ -149,23 +152,8 @@ def send_wati_message(recipient, message):
         if recipient.startswith('+'):
             recipient = recipient[1:]
             
-        # Extract the API endpoint ID number from the full URL
-        # For example, extract "441044" from "https://live-mt-server.wati.io/441044/api/v1/sendSessionMessage/"
-        endpoint_id = None
-        if WATI_API_ENDPOINT:
-            parts = WATI_API_ENDPOINT.split('/')
-            for part in parts:
-                if part.isdigit():
-                    endpoint_id = part
-                    break
-        
-        # If we couldn't extract the ID, use a default endpoint format
-        if endpoint_id:
-            endpoint = f"{WATI_API_ENDPOINT}/{endpoint_id}/api/v1/sendSessionMessage/{recipient}"
-        else:
-            # Look for the ID in the logs (based on your screenshot)
-            endpoint_id = "441044"  # This appears to be your endpoint ID based on logs
-            endpoint = f"{WATI_API_ENDPOINT}/{endpoint_id}/api/v1/sendSessionMessage/{recipient}"
+        # Build the endpoint - FIXED based on your logs
+        endpoint = f"{WATI_API_ENDPOINT}/{WATI_ACCOUNT_ID}/api/v1/sendSessionMessage/{recipient}"
         
         logger.info(f"Using endpoint: {endpoint}")
             
@@ -174,31 +162,34 @@ def send_wati_message(recipient, message):
             "Content-Type": "application/json"
         }
         
+        # Ensure message is not empty
+        if not message or message.strip() == "":
+            message = "Hello! This is a message from Birthday Bot."
+        
         payload = {
             "message": message
         }
         
         logger.info(f"Sending message to {recipient} with payload: {payload}")
         
-        # Try without proxies first
-        response = requests.post(endpoint, headers=headers, json=payload, timeout=15)
-        
-        if response.status_code == 200:
-            logger.info(f"Message sent to {recipient} successfully: {response.text}")
-            return True
-        else:
-            logger.error(f"Failed to send message: {response.status_code} - {response.text}")
-            # Try with a slightly different endpoint format as fallback
-            alternate_endpoint = f"{WATI_API_ENDPOINT}/api/v1/sendSessionMessage/{recipient}"
-            logger.info(f"Trying alternate endpoint: {alternate_endpoint}")
-            alt_response = requests.post(alternate_endpoint, headers=headers, json=payload, timeout=15)
+        try:
+            # Try primary endpoint first
+            response = requests.post(endpoint, headers=headers, json=payload, timeout=15)
             
-            if alt_response.status_code == 200:
-                logger.info(f"Message sent to {recipient} successfully with alternate endpoint: {alt_response.text}")
+            if response.status_code == 200:
+                response_json = response.json()
+                if isinstance(response_json, dict) and response_json.get("result") is False:
+                    logger.error(f"API returned error: {response_json}")
+                    return False
+                logger.info(f"Message sent to {recipient} successfully: {response.text}")
                 return True
             else:
-                logger.error(f"Failed to send message with alternate endpoint: {alt_response.status_code} - {alt_response.text}")
+                logger.error(f"Failed to send message: {response.status_code} - {response.text}")
                 return False
+                
+        except Exception as request_error:
+            logger.error(f"Request error: {request_error}")
+            return False
                 
     except Exception as e:
         logger.error(f"Error sending message via WATI: {e}")
@@ -313,8 +304,7 @@ def webhook():
             logger.warning(f"Data is not a dict: {data}")
             data = {}
             
-        # Check logs for proper WATI webhook format and extract correctly
-        # Using a more robust extraction method based on your logs
+        # Extract message details
         incoming_msg = ""
         sender = ""
         group_id = None
@@ -518,8 +508,9 @@ def process_command(incoming_msg, sender, group_id=None):
                     return f"🎂 Next birthday: {next_person[0]} on {bday.strftime('%d %B')} (in {next_person[2]} days)\n\n{get_random_ad()}"
 
         else:
+            # Default welcome message
             return f"""
-👋 Welcome to Whatsapp Birthday Alert Messenger!
+👋 *Welcome to Whatsapp Birthday Alert Messenger!*
 
 I'll help you remember birthdays. Try these commands:
 - *add <name> <DD-MM-YYYY>* e.g add valentine 25-12-1990
@@ -544,6 +535,7 @@ def diagnose():
             "environment_vars": {
                 "WATI_API_ENDPOINT": WATI_API_ENDPOINT,
                 "WATI_ACCESS_TOKEN": bool(WATI_ACCESS_TOKEN),
+                "WATI_ACCOUNT_ID": WATI_ACCOUNT_ID,
                 "WHATSAPP_NUMBER": WHATSAPP_NUMBER if WHATSAPP_NUMBER else "Not set",
                 "OWNER_PHONE": OWNER_PHONE if OWNER_PHONE else "Not set",
             },
@@ -566,17 +558,56 @@ def diagnose():
 @app.route('/test_wati', methods=['GET'])
 def test_wati():
     """Test WATI API connection"""
-    phone = request.args.get('phone', '')
+    phone = request.args.get('phone', OWNER_PHONE)
     if not phone:
         return jsonify({"status": "error", "message": "Please provide a phone number using the 'phone' query parameter"}), 400
     
-    test_message = "🧪 This is a test message from your Birthday Alert Bot! 🎂"
+    test_message = "🧪 This is a test message from your Birthday Alert Bot! 🎂\n\nIf you're seeing this, your WhatsApp integration is working correctly."
     success = send_wati_message(phone, test_message)
     
     if success:
         return jsonify({"status": "success", "message": f"Test message sent to {phone} successfully"})
     else:
         return jsonify({"status": "error", "message": "Failed to send test message. Check logs for details."}), 500
+
+# Add a manual trigger for birthday notifications
+@app.route('/send_notifications', methods=['GET'])
+def send_notifications():
+    """Manually trigger birthday notifications"""
+    try:
+        days_ahead = int(request.args.get('days', 1))
+        upcoming = check_upcoming_birthdays(days_ahead=days_ahead)
+        
+        if not upcoming:
+            return jsonify({"status": "success", "message": f"No birthdays found in the next {days_ahead} days"})
+            
+        birthdays = load_birthdays()
+        notification_count = 0
+        
+        for person in upcoming:
+            if "group_id" in person:
+                # Send to group
+                group_id = person["group_id"]
+                group_info = birthdays["groups"][group_id]
+                message = f"🎂 Reminder: {person['name']}'s birthday is {'today' if days_ahead == 0 else 'tomorrow' if days_ahead == 1 else f'in {days_ahead} days'}! 🎉\n\n{get_random_ad()}"        
+                if send_wati_message(group_info["phone"], message):
+                    notification_count += 1
+            else:
+                # Send to individual
+                message = f"🎂 Birthday Reminder: {person['name']}'s birthday is {'today' if days_ahead == 0 else 'tomorrow' if days_ahead == 1 else f'in {days_ahead} days'}! 🎉\n\n{get_random_ad()}"
+                recipient = OWNER_PHONE if OWNER_PHONE else person.get('phone', '')
+                if recipient and send_wati_message(recipient, message):
+                    notification_count += 1
+                    
+        return jsonify({
+            "status": "success", 
+            "message": f"Sent {notification_count} notification(s) for {len(upcoming)} upcoming birthday(s)",
+            "upcoming_birthdays": [f"{p['name']} ({p['birthday']})" for p in upcoming]
+        })
+        
+    except Exception as e:
+        logger.error(f"Error sending notifications: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 # Main execution block
 if __name__ == '__main__':
