@@ -7,6 +7,7 @@ import threading
 import random
 import requests
 from datetime import datetime, timedelta
+from urllib.parse import urljoin  # Add this import to fix the error
 from flask import Flask, request, jsonify
 
 # Configure logging
