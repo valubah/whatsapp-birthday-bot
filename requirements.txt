@@ -1,6 +1,7 @@
-flask
-requests
-schedule
-gunicorn
-python-dotenv
-threading
+flask==2.1.0
+requests==2.26.0
+schedule==1.1.0
+gunicorn==20.1.0
+python-dotenv==0.19.2
+# Explicitly add threading support
+futures==3.3.0  # for Python 2.7 compatibility
