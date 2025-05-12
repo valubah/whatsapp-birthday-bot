@@ -146,6 +146,46 @@ def check_upcoming_birthdays(days_ahead=1):
 
 
 
+# Add this constant for the users file
+USERS_FILE = "known_users.json"
+
+# Add this function to manage known users
+def load_known_users():
+    """Load list of users who have already received welcome message"""
+    try:
+        if os.path.exists(USERS_FILE):
+            with open(USERS_FILE, 'r') as f:
+                return json.load(f)
+        else:
+            return {"users": []}
+    except Exception as e:
+        logger.error(f"Error loading known users: {e}")
+        return {"users": []}
+
+def save_known_users(data):
+    """Save known users to JSON file"""
+    try:
+        with open(USERS_FILE, 'w') as f:
+            json.dump(data, f, indent=4)
+        return True
+    except Exception as e:
+        logger.error(f"Error saving known users: {e}")
+        return False
+
+def is_known_user(user_id):
+    """Check if user has interacted with the bot before"""
+    known_users = load_known_users()
+    return user_id in known_users["users"]
+
+def add_known_user(user_id):
+    """Add user to known users list"""
+    known_users = load_known_users()
+    if user_id not in known_users["users"]:
+        known_users["users"].append(user_id)
+        save_known_users(known_users)
+
+
+
 
 
 
@@ -447,12 +487,44 @@ def webhook():
         # Always return a success to stop WATI from retrying
         return jsonify({"status": "error", "message": str(e)}), 200
 
+
+
+
+
+
 def process_command(incoming_msg, sender, group_id=None):
     """Process commands and return appropriate response message"""
     try:
         # Log the command processing for debugging
         logger.info(f"Processing command: '{incoming_msg}' from sender: {sender}, group: {group_id}")
         
+        # Check if this is a first-time user
+        is_first_interaction = not is_known_user(sender)
+        
+        # List of valid command prefixes
+        valid_commands = ['help', 'add ', 'remove ', 'list', 'next']
+        
+        # Check if the message starts with any valid command prefix
+        is_command = any(incoming_msg.startswith(cmd) for cmd in valid_commands)
+        
+        # Send welcome message for first-time users
+        if is_first_interaction:
+            # Mark the user as known for future interactions
+            add_known_user(sender)
+            
+            # Send welcome message for first-time users
+            return f"""
+👋 *Welcome to Whatsapp Birthday Alert Messenger!*
+
+I'll help you remember birthdays. Try these commands:
+- *add <name> <DD-MM-YYYY>* e.g add valentine 25-12-1990
+- *list*
+- *help* (for more commands)
+
+{get_random_ad()}
+            """
+        
+        # Process specific commands
         if incoming_msg.startswith('help'):
             return f"""
 🤖 *Whatsapp Birthday Alert Commands*:
@@ -589,14 +661,13 @@ def process_command(incoming_msg, sender, group_id=None):
                     return f"🎂 Next birthday: {next_person[0]} on {bday.strftime('%d %B')} (in {next_person[2]} days)\n\n{get_random_ad()}"
 
         else:
-            # Default welcome message
+            # For unrecognized messages, send a helpful error instead of welcome message
             return f"""
-👋 *Welcome to Whatsapp Birthday Alert Messenger!*
-
-I'll help you remember birthdays. Try these commands:
-- *add <name> <DD-MM-YYYY>* e.g add valentine 25-12-1990
+❓ I didn't recognize that command. Try one of these:
+- *add <name> <DD-MM-YYYY>*
 - *list*
-- *help* (for more commands)
+- *next*
+- *help* (for all commands)
 
 {get_random_ad()}
             """
@@ -604,6 +675,17 @@ I'll help you remember birthdays. Try these commands:
     except Exception as e:
         logger.error(f"Error processing command: {e}")
         return f"❌ An error occurred: {str(e)}. Please try again.\n\n{get_random_ad()}"
+
+
+
+
+
+
+
+
+
+
+
 
 # Simple diagnostic endpoint to help with debugging webhook issues
 @app.route('/diagnose', methods=['GET'])
@@ -765,8 +847,21 @@ def add_test_birthday():
         logger.error(f"Error adding test birthday: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
+
+
+
+
+
 # Main execution block
 if __name__ == '__main__':
+
+
+    # Create users file if it doesn't exist
+    if not os.path.exists(USERS_FILE):
+        save_known_users({"users": []})
+        logger.info(f"Created new known users file: {USERS_FILE}")
+
+    
     # Create data file if it doesn't exist
     if not os.path.exists(DATA_FILE):
         save_birthdays({"personal": {}, "groups": {}})
