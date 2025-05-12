@@ -150,14 +150,9 @@ def send_wati_message(recipient, message):
         if recipient.startswith('+'):
             recipient = recipient[1:]
             
-        # Fixed: Properly construct the endpoint URL using the WATI API documentation format
-        # The correct format according to the WATI API is:
-        # POST /api/v1/sendSessionMessage/{whatsappNumber}
-        base_endpoint = WATI_API_ENDPOINT
-        if WATI_ACCOUNT_ID not in base_endpoint:
-            base_endpoint = f"{base_endpoint}/{WATI_ACCOUNT_ID}"
-        
-        endpoint = f"{base_endpoint}/api/v1/sendSessionMessage/{recipient}"
+        # Properly construct the endpoint URL based on the WATI API documentation
+        # The correct format is: POST /{tenantId}/api/v1/sendSessionMessage/{whatsappNumber}
+        endpoint = f"{WATI_API_ENDPOINT}/api/v1/sendSessionMessage/{recipient}"
         
         logger.info(f"Using endpoint: {endpoint}")
             
@@ -166,45 +161,38 @@ def send_wati_message(recipient, message):
             "Content-Type": "application/json"
         }
         
-        # FIXED: The WATI API is looking for a required parameter named "text", not "message"
-        # as per the API documentation visible in your screenshot
+        # The WATI API expects "messageText" parameter, not "text"
         payload = {
-            "text": message  # Changed from "message" to "text"
+            "messageText": message
         }
         
         logger.info(f"Sending message to {recipient} with payload: {payload}")
         
-        try:
-            response = requests.post(endpoint, headers=headers, json=payload, timeout=15)
-            response_text = response.text
-            
-            # Log the full response for debugging
-            logger.info(f"WATI API Response: Status {response.status_code}, Content: {response_text}")
-            
-            if response.status_code == 200:
-                try:
-                    response_json = response.json()
-                    if isinstance(response_json, dict) and response_json.get("result") is False:
-                        error_msg = response_json.get("info", "Unknown API error")
-                        logger.error(f"API returned error: {error_msg}")
-                        return False
-                    logger.info(f"Message sent to {recipient} successfully")
-                    return True
-                except json.JSONDecodeError:
-                    # If the response isn't valid JSON but status is 200, still consider it success
-                    logger.warning(f"Received non-JSON 200 response: {response_text}")
-                    return True
-            else:
-                logger.error(f"Failed to send message: {response.status_code} - {response_text}")
-                return False
-                
-        except Exception as request_error:
-            logger.error(f"Request error: {request_error}")
+        response = requests.post(endpoint, headers=headers, json=payload, timeout=15)
+        logger.info(f"WATI API Response: Status {response.status_code}, Content: {response.text}")
+        
+        if response.status_code == 200:
+            try:
+                response_json = response.json()
+                if isinstance(response_json, dict) and response_json.get("result") is False:
+                    error_msg = response_json.get("info", "Unknown API error")
+                    logger.error(f"API returned error: {error_msg}")
+                    return False
+                logger.info(f"Message sent to {recipient} successfully")
+                return True
+            except json.JSONDecodeError:
+                # If the response isn't valid JSON but status is 200, still consider it success
+                logger.warning(f"Received non-JSON 200 response: {response.text}")
+                return True
+        else:
+            logger.error(f"Failed to send message: {response.status_code} - {response.text}")
             return False
                 
     except Exception as e:
         logger.error(f"Error sending message via WATI: {e}")
         return False
+
+
 
 def daily_check():
     """Daily check for birthdays and send reminders"""
