@@ -98,6 +98,13 @@ def format_birthday(date_obj):
     """Format birthday to DD-MM-YYYY format"""
     return date_obj.strftime("%d-%m-%Y")
 
+
+
+
+
+
+
+
 def check_upcoming_birthdays(days_ahead=1):
     """Check for upcoming birthdays"""
     try:
@@ -105,22 +112,23 @@ def check_upcoming_birthdays(days_ahead=1):
         today = datetime.now().date()
         upcoming = []
 
-        # Check personal birthdays
-        for name, info in birthdays["personal"].items():
-            bday = datetime.strptime(info["birthday"], "%d-%m-%Y").date().replace(year=today.year)
-            # If birthday has passed this year, check for next year
-            if bday < today:
-                bday = bday.replace(year=today.year + 1)
+        # Check personal birthdays - updated for privacy
+        for user_id, user_birthdays in birthdays["personal"].items():
+            for name, info in user_birthdays.items():
+                bday = datetime.strptime(info["birthday"], "%d-%m-%Y").date().replace(year=today.year)
+                # If birthday has passed this year, check for next year
+                if bday < today:
+                    bday = bday.replace(year=today.year + 1)
 
-            days_until = (bday - today).days
+                days_until = (bday - today).days
 
-            if days_until == days_ahead:
-                upcoming.append({
-                    "name": name,
-                    "birthday": info["birthday"],
-                    "phone": info["phone"],
-                    "days_until": days_until
-                })
+                if days_until == days_ahead:
+                    upcoming.append({
+                        "name": name,
+                        "birthday": info["birthday"],
+                        "phone": user_id,  # User ID is now the phone number
+                        "days_until": days_until
+                    })
 
         # Check group birthdays
         for group_id, group_info in birthdays["groups"].items():
@@ -145,6 +153,99 @@ def check_upcoming_birthdays(days_ahead=1):
     except Exception as e:
         logger.error(f"Error checking upcoming birthdays: {e}")
         return []
+
+
+
+
+
+
+
+
+
+def daily_check():
+    """Daily check for birthdays and send reminders"""
+    try:
+        logger.info("Running daily birthday check...")
+        upcoming = check_upcoming_birthdays(days_ahead=1)
+        birthdays = load_birthdays()
+
+        for person in upcoming:
+            if "group_id" in person:
+                # Send to group
+                group_id = person["group_id"]
+                group_info = birthdays["groups"][group_id]
+                message = f"🎂 Reminder: {person['name']}'s birthday is tomorrow! 🎉\n\n{get_random_ad()}"
+                send_wati_message(group_info["phone"], message)
+            else:
+                # Send to individual - privacy improved, sends to the actual user
+                message = f"🎂 Birthday Reminder: {person['name']}'s birthday is tomorrow! 🎉\n\n{get_random_ad()}"
+                send_wati_message(person["phone"], message)
+
+        logger.info(f"Daily check completed, found {len(upcoming)} upcoming birthdays")
+    except Exception as e:
+        logger.error(f"Error in daily check: {e}")
+
+
+
+
+
+
+
+
+# Data migration function to update the data format for privacy
+def migrate_data_for_privacy():
+    """Migrate existing data to the new privacy-focused format"""
+    try:
+        if os.path.exists(DATA_FILE):
+            with open(DATA_FILE, 'r') as f:
+                old_data = json.load(f)
+            
+            # Check if we need to migrate
+            if "personal" in old_data and isinstance(old_data["personal"], dict):
+                # If any of the personal entries don't have phone as key, we need to migrate
+                needs_migration = False
+                for name, info in old_data["personal"].items():
+                    if "phone" in info:  # Old format had phone inside the info
+                        needs_migration = True
+                        break
+                
+                if needs_migration:
+                    logger.info("Migrating data to new privacy format...")
+                    new_data = {"personal": {}, "groups": old_data.get("groups", {})}
+                    
+                    # Restructure personal birthdays by phone number
+                    for name, info in old_data["personal"].items():
+                        if "phone" in info:
+                            phone = info["phone"]
+                            if phone not in new_data["personal"]:
+                                new_data["personal"][phone] = {}
+                                
+                            # Add birthday under the user's phone number
+                            new_data["personal"][phone][name] = {
+                                "birthday": info["birthday"],
+                                "added_on": info.get("added_on", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+                            }
+                    
+                    # Save migrated data
+                    with open(DATA_FILE, 'w') as f:
+                        json.dump(new_data, f, indent=4)
+                    logger.info("Data migration completed successfully")
+                    return True
+            
+            return False  # No migration needed
+                
+    except Exception as e:
+        logger.error(f"Error migrating data: {e}")
+        return False
+
+
+
+
+
+
+
+
+
 
 def send_wati_message(recipient, message, message_type="text", attachments=None, timeout=20):
     """
@@ -333,29 +434,12 @@ def send_wati_message(recipient, message, message_type="text", attachments=None,
         logger.error(error_msg, exc_info=True)
         return {"success": False, "error": error_msg}
 
-def daily_check():
-    """Daily check for birthdays and send reminders"""
-    try:
-        logger.info("Running daily birthday check...")
-        upcoming = check_upcoming_birthdays(days_ahead=1)
-        birthdays = load_birthdays()
 
-        for person in upcoming:
-            if "group_id" in person:
-                # Send to group
-                group_id = person["group_id"]
-                group_info = birthdays["groups"][group_id]
-                message = f"🎂 Reminder: {person['name']}'s birthday is tomorrow! 🎉\n\n{get_random_ad()}"
-                send_wati_message(group_info["phone"], message)
-            else:
-                # Send to individual
-                message = f"🎂 Birthday Reminder: {person['name']}'s birthday is tomorrow! 🎉\n\n{get_random_ad()}"
-                if OWNER_PHONE:
-                    send_wati_message(OWNER_PHONE, message)
 
-        logger.info(f"Daily check completed, found {len(upcoming)} upcoming birthdays")
-    except Exception as e:
-        logger.error(f"Error in daily check: {e}")
+
+
+
+
 
 # Schedule daily check at 9 AM
 schedule.every().day.at("09:00").do(daily_check)
@@ -450,16 +534,13 @@ def webhook():
         whatsapp_message_id = data.get('whatsappMessageId', '')
         event_type = data.get('eventType', '')
         
-        # CRITICAL: Only process "received" messages from users
-        # WATI sends different event types - we only want to respond to incoming user messages
-        if not (event_type == 'message_received' or event_type == 'received' or 
-                'received' in str(event_type).lower() or data.get('type') == 'incoming'):
-            logger.info(f"Ignoring non-user message event: {event_type}")
-            return jsonify({"status": "ignored", "reason": "Not a user message event"}), 200
+        # FIXED: Accept most message types from WATI except status updates
+        # Original restrictive filtering was causing the bot to ignore valid messages
+        should_ignore = False
         
-        # Never process delivery reports, read receipts or sent messages
+        # Only ignore delivery/status updates
         if event_type and any(status in event_type.lower() for status in 
-                             ['delivered', 'read', 'sent', 'failed', 'status']):
+                             ['delivered', 'read', 'failed', 'status']):
             logger.info(f"Ignoring status update event: {event_type}")
             return jsonify({"status": "ignored", "reason": "Status update event"}), 200
 
@@ -561,6 +642,10 @@ def webhook():
 
 
 
+
+
+
+
 def process_command(incoming_msg, sender, group_id=None):
     """Process commands and return appropriate response message"""
     try:
@@ -596,7 +681,7 @@ def process_command(incoming_msg, sender, group_id=None):
                         if group_id not in birthdays["groups"]:
                             birthdays["groups"][group_id] = {
                                 "name": f"Group {group_id[-6:]}",
-                                "phone": sender,
+                                "phone": group_id,
                                 "members": {}
                             }
 
@@ -606,10 +691,12 @@ def process_command(incoming_msg, sender, group_id=None):
                         }
                         message = f"✅ Added {name}'s birthday ({formatted_date}) to the group!\n\n{get_random_ad()}"
                     else:
-                        # Add to personal list
-                        birthdays["personal"][name] = {
+                        # Add to personal list - with improved privacy by using sender as key for personal birthdays
+                        if sender not in birthdays["personal"]:
+                            birthdays["personal"][sender] = {}
+                            
+                        birthdays["personal"][sender][name] = {
                             "birthday": formatted_date,
-                            "phone": sender,
                             "added_on": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         }
                         message = f"✅ Added {name}'s birthday ({formatted_date}) to your list!\n\n{get_random_ad()}"
@@ -627,15 +714,22 @@ def process_command(incoming_msg, sender, group_id=None):
             birthdays = load_birthdays()
 
             if group_id and group_id in birthdays["groups"]:
-                if name in birthdays["groups"][group_id]["members"]:
-                    del birthdays["groups"][group_id]["members"][name]
-                    save_birthdays(birthdays)
-                    return f"✅ Removed {name}'s birthday from the group!\n\n{get_random_ad()}"
+                # Verify sender is authorized to remove from group
+                # Only allow if they added the entry or it's a generic removal
+                group_info = birthdays["groups"][group_id]
+                if name in group_info["members"]:
+                    if group_info["members"][name]["added_by"] == sender:
+                        del group_info["members"][name]
+                        save_birthdays(birthdays)
+                        return f"✅ Removed {name}'s birthday from the group!\n\n{get_random_ad()}"
+                    else:
+                        return f"❌ Error: You can only remove birthdays that you added to the group.\n\n{get_random_ad()}"
                 else:
                     return f"❌ Error: {name} not found in this group's birthday list.\n\n{get_random_ad()}"
             else:
-                if name in birthdays["personal"]:
-                    del birthdays["personal"][name]
+                # For personal list - check in the user's personal list
+                if sender in birthdays["personal"] and name in birthdays["personal"][sender]:
+                    del birthdays["personal"][sender][name]
                     save_birthdays(birthdays)
                     return f"✅ Removed {name}'s birthday from your list!\n\n{get_random_ad()}"
                 else:
@@ -656,11 +750,12 @@ def process_command(incoming_msg, sender, group_id=None):
                     message += f"\n{get_random_ad()}"
                     return message
             else:
-                if not birthdays["personal"]:
+                # Only show the user's personal birthdays - privacy improvement
+                if sender not in birthdays["personal"] or not birthdays["personal"][sender]:
                     return f"📅 No birthdays saved yet.\n\n{get_random_ad()}"
                 else:
                     message = "📅 *Your Birthday List*:\n"
-                    for name, info in sorted(birthdays["personal"].items()):
+                    for name, info in sorted(birthdays["personal"][sender].items()):
                         date_obj = datetime.strptime(info["birthday"], "%d-%m-%Y")
                         message += f"- {name}: {date_obj.strftime('%d %B')}\n"
                     message += f"\n{get_random_ad()}"
@@ -684,9 +779,11 @@ def process_command(incoming_msg, sender, group_id=None):
                     days = days_until_birthday(info["birthday"])
                     next_birthdays.append((name, info["birthday"], days))
             else:
-                for name, info in birthdays["personal"].items():
-                    days = days_until_birthday(info["birthday"])
-                    next_birthdays.append((name, info["birthday"], days))
+                # Only check user's personal birthdays - privacy improvement
+                if sender in birthdays["personal"]:
+                    for name, info in birthdays["personal"][sender].items():
+                        days = days_until_birthday(info["birthday"])
+                        next_birthdays.append((name, info["birthday"], days))
 
             if not next_birthdays:
                 return f"📅 No birthdays saved yet.\n\n{get_random_ad()}"
@@ -718,6 +815,9 @@ I'll help you remember birthdays. Try these commands:
     except Exception as e:
         logger.error(f"Error processing command: {e}")
         return f"❌ An error occurred: {str(e)}. Please try again.\n\n{get_random_ad()}"
+
+
+
 
 
 
@@ -764,6 +864,9 @@ def diagnose():
 
 
 if __name__ == '__main__':
+    # Migrate data for privacy if needed
+    migrate_data_for_privacy()
+    
     # Create data file if it doesn't exist
     if not os.path.exists(DATA_FILE):
         save_birthdays({"personal": {}, "groups": {}})
@@ -777,6 +880,9 @@ if __name__ == '__main__':
     app.run(host='0.0.0.0', port=port, debug=False)
 else:
     # For WSGI servers like gunicorn or when running on PythonAnywhere
+    # Migrate data for privacy if needed
+    migrate_data_for_privacy()
+    
     # Create data file if it doesn't exist
     if not os.path.exists(DATA_FILE):
         save_birthdays({"personal": {}, "groups": {}})
