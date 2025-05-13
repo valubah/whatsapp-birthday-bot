@@ -7,7 +7,7 @@ import threading
 import random
 import requests
 from datetime import datetime, timedelta
-from urllib.parse import urljoin  # Add this import to fix the error
+from urllib.parse import urljoin
 from flask import Flask, request, jsonify
 
 # Configure logging
@@ -24,9 +24,9 @@ app = Flask(__name__)
 # Load environment variables for WATI
 WATI_ACCESS_TOKEN = os.environ.get('WATI_ACCESS_TOKEN')
 WATI_API_ENDPOINT = os.environ.get('WATI_API_ENDPOINT', 'https://live-mt-server.wati.io')
-WATI_ACCOUNT_ID = os.environ.get('WATI_ACCOUNT_ID', '441044')  # Fixed account ID
+WATI_ACCOUNT_ID = os.environ.get('WATI_ACCOUNT_ID', '441044')
 WHATSAPP_NUMBER = os.environ.get('WHATSAPP_NUMBER')
-OWNER_PHONE = os.environ.get('OWNER_PHONE', '')  # Default to empty string if not set
+OWNER_PHONE = os.environ.get('OWNER_PHONE', '')
 
 # Storage for birthdays (In a production environment, use a database)
 DATA_FILE = "birthdays.json"
@@ -140,35 +140,22 @@ def check_upcoming_birthdays(days_ahead=1):
         logger.error(f"Error checking upcoming birthdays: {e}")
         return []
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 def send_wati_message(recipient, message, message_type="text", attachments=None, timeout=20):
     """
     Sends a WhatsApp message using the WATI API.
-    
+
     Args:
         recipient (str): The recipient's phone number (with or without '+' prefix)
         message (str): The message content to send
         message_type (str, optional): The type of message - "text" (default), "template", "image", etc.
         attachments (dict, optional): Any attachments to include with the message
         timeout (int, optional): Request timeout in seconds (default: 20)
-        
+
     Returns:
         dict: Response information with keys:
-            - success (bool): Whether the message was sent successfully
-            - message_id (str, optional): The ID of the sent message if successful
-            - error (str, optional): Error message if unsuccessful
+        - success (bool): Whether the message was sent successfully
+        - message_id (str, optional): The ID of the sent message if successful
+        - error (str, optional): Error message if unsuccessful
     """
     try:
         # --- Initial Checks ---
@@ -192,12 +179,12 @@ def send_wati_message(recipient, message, message_type="text", attachments=None,
 
         # --- Prepare API endpoint ---
         base_api_url = WATI_API_ENDPOINT.rstrip('/') + '/'  # Ensure trailing slash
-        
+
         # Determine which endpoint to use based on message type
         if message_type == "text":
             relative_path = f"api/v1/sendSessionMessage/{formatted_recipient}"
         elif message_type == "template":
-            relative_path = f"api/v1/sendTemplateMessage/{formatted_recipient}" 
+            relative_path = f"api/v1/sendTemplateMessage/{formatted_recipient}"
         elif message_type == "image":
             relative_path = f"api/v1/sendSessionMessage/{formatted_recipient}/image"
         elif message_type == "file":
@@ -205,7 +192,7 @@ def send_wati_message(recipient, message, message_type="text", attachments=None,
         else:
             # Default to text message
             relative_path = f"api/v1/sendSessionMessage/{formatted_recipient}"
-            
+
         target_endpoint = urljoin(base_api_url, relative_path)
 
         # --- Prepare headers and parameters ---
@@ -217,7 +204,7 @@ def send_wati_message(recipient, message, message_type="text", attachments=None,
         params = {}
         data = None
         json_data = None
-        
+
         if message_type == "text":
             # For text messages, use query parameter
             params = {"messageText": message}
@@ -237,10 +224,10 @@ def send_wati_message(recipient, message, message_type="text", attachments=None,
                 }
             else:
                 return {"success": False, "error": f"URL required for {message_type} message type"}
-                
+
         # --- Make the API request ---
         logger.info(f"Sending {message_type} message to {formatted_recipient}")
-        
+
         try:
             if json_data:
                 headers["Content-Type"] = "application/json"
@@ -259,32 +246,32 @@ def send_wati_message(recipient, message, message_type="text", attachments=None,
                     data=data,
                     timeout=timeout
                 )
-                
+
             # --- Process the response ---
             response_text = response.text if response.text and response.text.strip() else '(empty response body)'
-            
+
             if response.status_code in [200, 201, 202]:
                 try:
                     if not response.text.strip():
                         logger.warning(f"Empty response body with status {response.status_code}")
                         return {"success": True, "warning": "Empty response body"}
-                        
+
                     data = response.json()
                     if isinstance(data, dict):
                         # Check for successful response patterns
                         if (data.get("result") == "success" and data.get("ok") is True) or \
                            (data.get("id") and data.get("status") in ["submitted", "sent", "OK", "queued", "success"]):
-                            
+
                             # Extract message ID if available
                             message_id = None
                             if "message" in data and isinstance(data["message"], dict):
                                 message_id = data["message"].get("whatsappMessageId") or data["message"].get("id")
                             elif "id" in data:
                                 message_id = data.get("id")
-                                
-                            logger.info(f"Message sent successfully to {formatted_recipient}" + 
-                                       (f": ID {message_id}" if message_id else ""))
-                            
+
+                            logger.info(f"Message sent successfully to {formatted_recipient}" +
+                                        (f": ID {message_id}" if message_id else ""))
+
                             return {
                                 "success": True,
                                 "message_id": message_id,
@@ -309,7 +296,7 @@ def send_wati_message(recipient, message, message_type="text", attachments=None,
                 # Handle error status codes
                 error_msg = f"HTTP {response.status_code}: {response_text}"
                 logger.error(error_msg)
-                
+
                 if response.status_code == 404:
                     error_detail = "Endpoint not found. Check API URL and path."
                 elif response.status_code == 400:
@@ -318,14 +305,14 @@ def send_wati_message(recipient, message, message_type="text", attachments=None,
                     error_detail = "Authentication failure. Check your access token."
                 else:
                     error_detail = "Unknown error."
-                
+
                 return {
-                    "success": False, 
+                    "success": False,
                     "error": error_msg,
                     "error_detail": error_detail,
                     "status_code": response.status_code
                 }
-                
+
         except requests.exceptions.Timeout:
             timeout_msg = f"Request to WATI API timed out after {timeout}s"
             logger.error(timeout_msg)
@@ -340,18 +327,6 @@ def send_wati_message(recipient, message, message_type="text", attachments=None,
         logger.error(error_msg, exc_info=True)
         return {"success": False, "error": error_msg}
 
-
-
-
-
-
-
-
-
-
-
-
-
 def daily_check():
     """Daily check for birthdays and send reminders"""
     try:
@@ -364,7 +339,7 @@ def daily_check():
                 # Send to group
                 group_id = person["group_id"]
                 group_info = birthdays["groups"][group_id]
-                message = f"🎂 Reminder: {person['name']}'s birthday is tomorrow! 🎉\n\n{get_random_ad()}"        
+                message = f"🎂 Reminder: {person['name']}'s birthday is tomorrow! 🎉\n\n{get_random_ad()}"
                 send_wati_message(group_info["phone"], message)
             else:
                 # Send to individual
@@ -379,14 +354,13 @@ def daily_check():
 # Schedule daily check at 9 AM
 schedule.every().day.at("09:00").do(daily_check)
 
+# Fixed run_scheduler function with proper sleep time
 def run_scheduler():
     """Run the scheduler in a separate thread"""
     while True:
         schedule.run_pending()
+        # Sleep for 60 seconds between checks, not continuously running
         time.sleep(60)  # Check every minute
-
-# Start the scheduler in a separate thread
-scheduler_thread = None
 
 @app.route('/')
 def home():
@@ -406,12 +380,12 @@ def webhook():
         if request.method == 'GET':
             logger.info("Received GET request to webhook")
             return jsonify({"status": "ok"}), 200
-            
+
         # Log all headers and content for debugging
         logger.info(f"Headers: {dict(request.headers)}")
         logger.info(f"Content type: {request.content_type}")
         logger.info(f"Raw data: {request.data.decode('utf-8') if request.data else 'No data'}")
-        
+
         # Extract data from request
         data = {}
         try:
@@ -435,7 +409,7 @@ def webhook():
                         text_match = re.search(r'"text"\s*:\s*"([^"]+)"', raw_data)
                         waid_match = re.search(r'"waId"\s*:\s*"([^"]+)"', raw_data)
                         groupid_match = re.search(r'"(groupId|chatId)"\s*:\s*"([^"]+)"', raw_data)
-                        
+
                         if text_match:
                             data['text'] = text_match.group(1)
                         if waid_match:
@@ -444,37 +418,37 @@ def webhook():
                             data[groupid_match.group(1)] = groupid_match.group(2)
                     except:
                         pass
-        
+
         logger.info(f"Processed data: {data}")
-            
+
         # Extract message details
         incoming_msg = ""
         sender = ""
         group_id = None
-        
+
         # Extract message content (handle various possible field names)
         for field in ['text', 'body', 'message']:
             if field in data:
                 incoming_msg = data.get(field, '').strip().lower()
                 if incoming_msg:
                     break
-        
+
         # Extract sender ID (handle various possible field names)
         for field in ['waId', 'from', 'sender', 'contactId']:
             if field in data:
                 sender = data.get(field, '')
                 if sender:
                     break
-            
+
         # Check for group ID (handle various possible field names)
         for field in ['groupId', 'chatId', 'group_id']:
             if field in data:
                 group_id = data.get(field)
                 if group_id:
                     break
-            
+
         logger.info(f"Extracted data: Message: '{incoming_msg}', Sender: '{sender}', Group: '{group_id}'")
-        
+
         # Special handling for empty messages - just send help message
         if not incoming_msg and sender:
             response_message = process_command("help", sender, group_id)
@@ -484,26 +458,26 @@ def webhook():
             else:
                 logger.error(f"Failed to send help message to {sender}")
             return jsonify({"status": "success", "message": "Sent help message for empty request"}), 200
-            
+
         # Only process if we have a message and sender
         if incoming_msg and sender:
             # Process commands
             response_message = process_command(incoming_msg, sender, group_id)
-            
+
             # Send response via WATI API
             if response_message:
-                success = send_wati_message(sender, response_message)
-                if success:
+                result = send_wati_message(sender, response_message)
+                if result.get("success"):
                     logger.info(f"Successfully sent response to {sender}")
                 else:
                     logger.error(f"Failed to send response to {sender}")
-                
+
             return jsonify({"status": "success", "message": "Processed message"}), 200
         else:
             # If we don't have a message but the request came in, acknowledge it anyway
             logger.warning("Valid webhook request but could not extract message data")
             return jsonify({"status": "acknowledged", "message": "Request received but no valid message data found"}), 200
-            
+
     except Exception as e:
         logger.error(f"Error in webhook: {str(e)}", exc_info=True)
         # Always return a success to stop WATI from retrying
@@ -514,7 +488,7 @@ def process_command(incoming_msg, sender, group_id=None):
     try:
         # Log the command processing for debugging
         logger.info(f"Processing command: '{incoming_msg}' from sender: {sender}, group: {group_id}")
-        
+
         if incoming_msg.startswith('help'):
             return f"""
 🤖 *Whatsapp Birthday Alert Commands*:
@@ -525,7 +499,7 @@ def process_command(incoming_msg, sender, group_id=None):
 - *help*: Show this message
 
 {get_random_ad()}
-            """
+"""
 
         elif incoming_msg.startswith('add '):
             parts = incoming_msg[4:].split()
@@ -661,11 +635,17 @@ I'll help you remember birthdays. Try these commands:
 - *help* (for more commands)
 
 {get_random_ad()}
-            """
-            
+"""
+
     except Exception as e:
         logger.error(f"Error processing command: {e}")
         return f"❌ An error occurred: {str(e)}. Please try again.\n\n{get_random_ad()}"
+
+
+
+
+
+
 
 # Simple diagnostic endpoint to help with debugging webhook issues
 @app.route('/diagnose', methods=['GET'])
@@ -698,134 +678,14 @@ def diagnose():
         logger.error(f"Error in diagnose endpoint: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
-@app.route('/test_wati', methods=['GET'])
-def test_wati():
-    """Test WATI API connection"""
-    try:
-        phone = request.args.get('phone', OWNER_PHONE)
-        if not phone:
-            return jsonify({"status": "error", "message": "Please provide a phone number using the 'phone' query parameter"}), 400
-        
-        test_message = "🧪 This is a test message from your Birthday Alert Bot! 🎂\n\nIf you're seeing this, your WhatsApp integration is working correctly."
-        
-        logger.info(f"Testing WATI API connection for phone: {phone}")
-        
-        # Build the base endpoint
-        base_endpoint = WATI_API_ENDPOINT
-        if WATI_ACCOUNT_ID not in base_endpoint:
-            base_endpoint = f"{base_endpoint}/{WATI_ACCOUNT_ID}"
-        
-        # Log detailed API information for debugging
-        logger.info(f"WATI API Base URL: {base_endpoint}")
-        logger.info(f"WATI Account ID: {WATI_ACCOUNT_ID}")
-        logger.info(f"WATI Token Available: {bool(WATI_ACCESS_TOKEN)}")
-        
-        success = send_wati_message(phone, test_message)
-        
-        if success:
-            return jsonify({"status": "success", "message": f"Test message sent to {phone} successfully"})
-        else:
-            # Try with a simpler message in case formatting is the issue
-            simple_message = "Test message from Birthday Bot"
-            simple_success = send_wati_message(phone, simple_message)
-            
-            if simple_success:
-                return jsonify({"status": "success", "message": f"Simple test message sent to {phone} successfully"})
-            else:
-                return jsonify({
-                    "status": "error", 
-                    "message": "Failed to send test message. Check logs for details.",
-                    "api_details": {
-                        "endpoint": base_endpoint,
-                        "account_id": WATI_ACCOUNT_ID
-                    }
-                }), 500
-    except Exception as e:
-        logger.error(f"Error in test_wati endpoint: {e}", exc_info=True)
-        return jsonify({"status": "error", "message": str(e)}), 500
 
-# Add a manual trigger for birthday notifications
-@app.route('/send_notifications', methods=['GET'])
-def send_notifications():
-    """Manually trigger birthday notifications"""
-    try:
-        days_ahead = int(request.args.get('days', 1))
-        upcoming = check_upcoming_birthdays(days_ahead=days_ahead)
-        
-        if not upcoming:
-            return jsonify({"status": "success", "message": f"No birthdays found in the next {days_ahead} days"})
-            
-        birthdays = load_birthdays()
-        notification_count = 0
-        
-        for person in upcoming:
-            if "group_id" in person:
-                # Send to group
-                group_id = person["group_id"]
-                group_info = birthdays["groups"][group_id]
-                message = f"🎂 Reminder: {person['name']}'s birthday is {'today' if days_ahead == 0 else 'tomorrow' if days_ahead == 1 else f'in {days_ahead} days'}! 🎉\n\n{get_random_ad()}"        
-                if send_wati_message(group_info["phone"], message):
-                    notification_count += 1
-            else:
-                # Send to individual
-                message = f"🎂 Birthday Reminder: {person['name']}'s birthday is {'today' if days_ahead == 0 else 'tomorrow' if days_ahead == 1 else f'in {days_ahead} days'}! 🎉\n\n{get_random_ad()}"
-                recipient = OWNER_PHONE if OWNER_PHONE else person.get('phone', '')
-                if recipient and send_wati_message(recipient, message):
-                    notification_count += 1
-                    
-        return jsonify({
-            "status": "success", 
-            "message": f"Sent {notification_count} notification(s) for {len(upcoming)} upcoming birthday(s)",
-            "upcoming_birthdays": [f"{p['name']} ({p['birthday']})" for p in upcoming]
-        })
-        
-    except Exception as e:
-        logger.error(f"Error sending notifications: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
 
-# Add convenient endpoint to manually add a birthday for testing
-@app.route('/add_birthday', methods=['GET'])
-def add_test_birthday():
-    """Add a test birthday for debugging"""
-    try:
-        name = request.args.get('name', 'Test Person')
-        date_str = request.args.get('date', datetime.now().strftime('%d-%m-%Y'))
-        phone = request.args.get('phone', OWNER_PHONE)
-        
-        try:
-            date_obj = parse_date(date_str)
-            formatted_date = format_birthday(date_obj)
 
-            birthdays = load_birthdays()
-            
-            # Add to personal list
-            birthdays["personal"][name] = {
-                "birthday": formatted_date,
-                "phone": phone,
-                "added_on": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            }
-            
-            save_birthdays(birthdays)
-            
-            # Calculate days until birthday
-            today = datetime.now().date()
-            bday = datetime.strptime(formatted_date, "%d-%m-%Y").date().replace(year=today.year)
-            if bday < today:
-                bday = bday.replace(year=today.year + 1)
-            days_until = (bday - today).days
-            
-            return jsonify({
-                "status": "success", 
-                "message": f"Added {name}'s birthday ({formatted_date}) for testing",
-                "days_until": days_until
-            })
-            
-        except Exception as e:
-            return jsonify({"status": "error", "message": f"Error parsing date: {str(e)}"}), 400
-            
-    except Exception as e:
-        logger.error(f"Error adding test birthday: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+
+
+
 
 # Main execution block
 if __name__ == '__main__':
