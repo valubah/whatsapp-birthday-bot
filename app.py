@@ -354,13 +354,16 @@ def daily_check():
 # Schedule daily check at 9 AM
 schedule.every().day.at("09:00").do(daily_check)
 
-# Fixed run_scheduler function with proper sleep time
+
+
 def run_scheduler():
     """Run the scheduler in a separate thread"""
     while True:
         schedule.run_pending()
-        # Sleep for 60 seconds between checks, not continuously running
         time.sleep(60)  # Check every minute
+
+# Start the scheduler in a separate thread
+scheduler_thread = None
 
 @app.route('/')
 def home():
@@ -685,31 +688,26 @@ def diagnose():
 
 
 
-
-
-# Main execution block
 if __name__ == '__main__':
     # Create data file if it doesn't exist
     if not os.path.exists(DATA_FILE):
         save_birthdays({"personal": {}, "groups": {}})
-        logger.info(f"Created new birthdays data file: {DATA_FILE}")
 
-    # Start scheduler thread
+    # Start the scheduler in a separate thread
     scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
     scheduler_thread.start()
-    logger.info("Started scheduler thread")
 
-    # Log configuration information
-    logger.info(f"Starting Birthday Bot with the following configuration:")
-    logger.info(f"WATI API Endpoint: {WATI_API_ENDPOINT}")
-    logger.info(f"WATI Account ID: {WATI_ACCOUNT_ID}")
-    logger.info(f"WhatsApp Number: {WHATSAPP_NUMBER if WHATSAPP_NUMBER else 'Not set'}")
-    logger.info(f"Owner Phone: {OWNER_PHONE if OWNER_PHONE else 'Not set'}")
-    
-    # Run daily check on startup
-    logger.info("Running initial birthday check...")
-    daily_check()
-    
-    # Start the Flask app
+    # Run Flask app
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
+else:
+    # For WSGI servers like gunicorn or when running on PythonAnywhere
+    # Create data file if it doesn't exist
+    if not os.path.exists(DATA_FILE):
+        save_birthdays({"personal": {}, "groups": {}})
+
+    # Start the scheduler only once
+    if not scheduler_thread:
+        scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
+        scheduler_thread.start()
+        logger.info("Scheduler started in WSGI mode")
