@@ -403,6 +403,9 @@ def health():
 
 
 
+
+
+
 @app.route('/webhook', methods=['POST', 'GET'])
 def webhook():
     """Handle incoming WhatsApp messages from WATI"""
@@ -582,11 +585,9 @@ def process_command(incoming_msg, sender, group_id=None):
 🤖 *Whatsapp Birthday Alert Commands*:
 - *add <name> <DD-MM-YYYY>*: Add a birthday
 - *remove <name>*: Remove a birthday
-- *list*: List your birthdays
-- *next*: Show your next birthday reminder
+- *list*: List all birthdays
+- *next*: Show next birthday
 - *help*: Show this message
-
-Your birthdays are private and only visible to you!
 
 {get_random_ad()}
 """
@@ -618,21 +619,13 @@ Your birthdays are private and only visible to you!
                         }
                         message = f"✅ Added {name}'s birthday ({formatted_date}) to the group!\n\n{get_random_ad()}"
                     else:
-                        # Add to user's personal list
-                        if sender not in birthdays["users"]:
-                            birthdays["users"][sender] = {
-                                "birthdays": {},
-                                "last_activity": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                            }
-                        
-                        if "birthdays" not in birthdays["users"][sender]:
-                            birthdays["users"][sender]["birthdays"] = {}
-                            
-                        birthdays["users"][sender]["birthdays"][name] = {
+                        # Add to personal list
+                        birthdays["personal"][name] = {
                             "birthday": formatted_date,
+                            "phone": sender,
                             "added_on": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         }
-                        message = f"✅ Added {name}'s birthday ({formatted_date}) to your private list!\n\n{get_random_ad()}"
+                        message = f"✅ Added {name}'s birthday ({formatted_date}) to your list!\n\n{get_random_ad()}"
 
                     save_birthdays(birthdays)
                     return message
@@ -654,11 +647,10 @@ Your birthdays are private and only visible to you!
                 else:
                     return f"❌ Error: {name} not found in this group's birthday list.\n\n{get_random_ad()}"
             else:
-                # Check user's personal birthdays
-                if sender in birthdays["users"] and name in birthdays["users"][sender].get("birthdays", {}):
-                    del birthdays["users"][sender]["birthdays"][name]
+                if name in birthdays["personal"]:
+                    del birthdays["personal"][name]
                     save_birthdays(birthdays)
-                    return f"✅ Removed {name}'s birthday from your private list!\n\n{get_random_ad()}"
+                    return f"✅ Removed {name}'s birthday from your list!\n\n{get_random_ad()}"
                 else:
                     return f"❌ Error: {name} not found in your birthday list.\n\n{get_random_ad()}"
 
@@ -677,13 +669,11 @@ Your birthdays are private and only visible to you!
                     message += f"\n{get_random_ad()}"
                     return message
             else:
-                # Show only user's personal birthdays
-                if sender not in birthdays["users"] or not birthdays["users"][sender].get("birthdays"):
-                    return f"📅 You haven't saved any birthdays yet.\n\n{get_random_ad()}"
+                if not birthdays["personal"]:
+                    return f"📅 No birthdays saved yet.\n\n{get_random_ad()}"
                 else:
-                    message = "📅 *Your Private Birthday List*:\n"
-                    user_birthdays = birthdays["users"][sender].get("birthdays", {})
-                    for name, info in sorted(user_birthdays.items()):
+                    message = "📅 *Your Birthday List*:\n"
+                    for name, info in sorted(birthdays["personal"].items()):
                         date_obj = datetime.strptime(info["birthday"], "%d-%m-%Y")
                         message += f"- {name}: {date_obj.strftime('%d %B')}\n"
                     message += f"\n{get_random_ad()}"
@@ -707,50 +697,43 @@ Your birthdays are private and only visible to you!
                     days = days_until_birthday(info["birthday"])
                     next_birthdays.append((name, info["birthday"], days))
             else:
-                # Only check user's personal birthday
+                for name, info in birthdays["personal"].items():
+                    days = days_until_birthday(info["birthday"])
+                    next_birthdays.append((name, info["birthday"], days))
 
-                 if sender in birthdays["users"] and "birthdays" in birthdays["users"][sender]:
-                    for name, info in birthdays["users"][sender]["birthdays"].items():
-                        days = days_until_birthday(info["birthday"])
-                        next_birthdays.append((name, info["birthday"], days))
-
-            # Check if we found any birthdays
             if not next_birthdays:
-                return f"📅 No birthdays found in your list.\n\n{get_random_ad()}"
-                
-            # Sort by days until
-            next_birthdays.sort(key=lambda x: x[2])
-            
-            # Create response message
-            if group_id:
-                message = "📅 *Upcoming Group Birthdays*:\n"
+                return f"📅 No birthdays saved yet.\n\n{get_random_ad()}"
             else:
-                message = "📅 *Upcoming Birthdays*:\n"
-                
-            # Show the next 5 birthdays
-            for i, (name, bd_date, days) in enumerate(next_birthdays[:5]):
-                date_obj = datetime.strptime(bd_date, "%d-%m-%Y")
-                if days == 0:
-                    message += f"- {name}: *TODAY!* 🎂🎉\n"
-                elif days == 1:
-                    message += f"- {name}: *TOMORROW!* ⏰\n"
-                else:
-                    message += f"- {name}: {date_obj.strftime('%d %B')} (in {days} days)\n"
-                    
-            message += f"\n{get_random_ad()}"
-            return message
+                next_birthdays.sort(key=lambda x: x[2])  # Sort by days until birthday
+                next_person = next_birthdays[0]
 
-        # If the message doesn't match any command, ignore it (or you could add a default response)
+                if next_person[2] == 0:
+                    return f"🎂 Today is {next_person[0]}'s birthday! 🎉\n\n{get_random_ad()}"
+                elif next_person[2] == 1:
+                    return f"🎂 Tomorrow is {next_person[0]}'s birthday! 🎉\n\n{get_random_ad()}"
+                else:
+                    bday = datetime.strptime(next_person[1], "%d-%m-%Y")
+                    return f"🎂 Next birthday: {next_person[0]} on {bday.strftime('%d %B')} (in {next_person[2]} days)\n\n{get_random_ad()}"
+
         else:
-            # If it's the first message from this user, send help
-            birthdays = load_birthdays()
-            if sender not in birthdays["users"]:
-                return f"👋 Welcome to Birthday Alert Bot!\n\nType *help* to see available commands.\n\n{get_random_ad()}"
-            return None
+            # Default welcome message
+            return f"""
+👋 *Welcome to Whatsapp Birthday Alert Messenger!*
+
+I'll help you remember birthdays. Try these commands:
+- *add <name> <DD-MM-YYYY>* e.g add valentine 25-12-1990
+- *list*
+- *help* (for more commands)
+
+{get_random_ad()}
+"""
 
     except Exception as e:
         logger.error(f"Error processing command: {e}")
-        return f"❌ Error processing your request. Please try again or type *help*.\n\n{get_random_ad()}"
+        return f"❌ An error occurred: {str(e)}. Please try again.\n\n{get_random_ad()}"
+
+
+
 
 
 
