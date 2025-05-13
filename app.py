@@ -28,6 +28,7 @@ WATI_ACCOUNT_ID = os.environ.get('WATI_ACCOUNT_ID', '441044')
 WHATSAPP_NUMBER = os.environ.get('WHATSAPP_NUMBER')
 OWNER_PHONE = os.environ.get('OWNER_PHONE', '')
 
+
 # Add this near the top of the file, after the other global variables
 # Cache to track processed message IDs to prevent duplicate processing
 PROCESSED_MESSAGES = set()
@@ -55,18 +56,10 @@ def load_birthdays():
             with open(DATA_FILE, 'r') as f:
                 return json.load(f)
         else:
-            # Updated structure with users dictionary to store user-specific birthdays
-            return {
-                "users": {},  # User-specific personal birthdays
-                "groups": {}  # Group birthdays (accessible to group members)
-            }
+            return {"personal": {}, "groups": {}}
     except Exception as e:
         logger.error(f"Error loading birthdays: {e}")
-        # Updated structure with users dictionary
-        return {
-            "users": {},
-            "groups": {}
-        }
+        return {"personal": {}, "groups": {}}
 
 def save_birthdays(data):
     """Save birthdays to JSON file"""
@@ -112,32 +105,31 @@ def check_upcoming_birthdays(days_ahead=1):
         today = datetime.now().date()
         upcoming = []
 
-        # Function to calculate next birthday date
-        def get_next_birthday(date_str):
-            bday = datetime.strptime(date_str, "%d-%m-%Y").date().replace(year=today.year)
+        # Check personal birthdays
+        for name, info in birthdays["personal"].items():
+            bday = datetime.strptime(info["birthday"], "%d-%m-%Y").date().replace(year=today.year)
+            # If birthday has passed this year, check for next year
             if bday < today:
                 bday = bday.replace(year=today.year + 1)
-            return bday
 
-        # Check personal birthdays for all users (for admin notifications only)
-        for user_id, user_data in birthdays["users"].items():
-            for name, info in user_data.get("birthdays", {}).items():
-                bday = get_next_birthday(info["birthday"])
-                days_until = (bday - today).days
+            days_until = (bday - today).days
 
-                if days_until == days_ahead:
-                    upcoming.append({
-                        "name": name,
-                        "birthday": info["birthday"],
-                        "phone": user_id,  # The user who added this birthday
-                        "owner_phone": user_id,  # The owner of this birthday entry
-                        "days_until": days_until
-                    })
+            if days_until == days_ahead:
+                upcoming.append({
+                    "name": name,
+                    "birthday": info["birthday"],
+                    "phone": info["phone"],
+                    "days_until": days_until
+                })
 
         # Check group birthdays
         for group_id, group_info in birthdays["groups"].items():
             for name, info in group_info["members"].items():
-                bday = get_next_birthday(info["birthday"])
+                bday = datetime.strptime(info["birthday"], "%d-%m-%Y").date().replace(year=today.year)
+                # If birthday has passed this year, check for next year
+                if bday < today:
+                    bday = bday.replace(year=today.year + 1)
+
                 days_until = (bday - today).days
 
                 if days_until == days_ahead:
@@ -356,14 +348,10 @@ def daily_check():
                 message = f"🎂 Reminder: {person['name']}'s birthday is tomorrow! 🎉\n\n{get_random_ad()}"
                 send_wati_message(group_info["phone"], message)
             else:
-                # Send personal birthday reminders to the user who added them
-                user_id = person["owner_phone"]
+                # Send to individual
                 message = f"🎂 Birthday Reminder: {person['name']}'s birthday is tomorrow! 🎉\n\n{get_random_ad()}"
-                send_wati_message(user_id, message)
-                
-                # Also notify system owner if configured
-                if OWNER_PHONE and OWNER_PHONE != user_id:
-                    send_wati_message(OWNER_PHONE, f"System notification: {person['name']}'s birthday tomorrow (added by {user_id})")
+                if OWNER_PHONE:
+                    send_wati_message(OWNER_PHONE, message)
 
         logger.info(f"Daily check completed, found {len(upcoming)} upcoming birthdays")
     except Exception as e:
@@ -371,6 +359,8 @@ def daily_check():
 
 # Schedule daily check at 9 AM
 schedule.every().day.at("09:00").do(daily_check)
+
+
 
 def run_scheduler():
     """Run the scheduler in a separate thread"""
@@ -390,9 +380,6 @@ def home():
 def health():
     """Health check route"""
     return jsonify({"status": "ok", "timestamp": datetime.now().isoformat()})
-
-
-
 
 
 
@@ -731,9 +718,6 @@ I'll help you remember birthdays. Try these commands:
     except Exception as e:
         logger.error(f"Error processing command: {e}")
         return f"❌ An error occurred: {str(e)}. Please try again.\n\n{get_random_ad()}"
-
-
-
 
 
 
