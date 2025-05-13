@@ -389,6 +389,10 @@ def health():
 
 
 
+
+
+
+
 @app.route('/webhook', methods=['POST', 'GET'])
 def webhook():
     """Handle incoming WhatsApp messages from WATI"""
@@ -445,43 +449,78 @@ def webhook():
         message_id = data.get('id', '')
         whatsapp_message_id = data.get('whatsappMessageId', '')
         event_type = data.get('eventType', '')
+        
+        # CRITICAL: Only process "received" messages from users
+        # WATI sends different event types - we only want to respond to incoming user messages
+        if not (event_type == 'message_received' or event_type == 'received' or 
+                'received' in str(event_type).lower() or data.get('type') == 'incoming'):
+            logger.info(f"Ignoring non-user message event: {event_type}")
+            return jsonify({"status": "ignored", "reason": "Not a user message event"}), 200
+        
+        # Never process delivery reports, read receipts or sent messages
+        if event_type and any(status in event_type.lower() for status in 
+                             ['delivered', 'read', 'sent', 'failed', 'status']):
+            logger.info(f"Ignoring status update event: {event_type}")
+            return jsonify({"status": "ignored", "reason": "Status update event"}), 200
 
-        # If this is a message sent by the bot, ignore it to prevent loops
-        if event_type == 'sessionMessageSent_v2' or data.get('owner') is True:
-            logger.info(f"Ignoring message sent by bot (eventType: {event_type})")
+        # Check for bot-generated messages
+        if (data.get('owner') is True or 
+            data.get('fromMe') is True or 
+            data.get('isFromMe') is True or 
+            data.get('type') == 'outgoing' or 
+            data.get('direction') == 'outgoing'):
+            logger.info(f"Ignoring message sent by bot")
             return jsonify({"status": "ignored", "reason": "Bot's own message"}), 200
 
         # Check if we've already processed this message
-        unique_id = message_id or whatsapp_message_id
-        if unique_id and unique_id in PROCESSED_MESSAGES:
+        unique_id = message_id or whatsapp_message_id or data.get('messageId', '')
+        if not unique_id:
+            # Try to create a unique ID from combination of sender and timestamp
+            timestamp = data.get('timestamp', '') or data.get('creation_time', '') or str(time.time())
+            unique_id = f"{sender}_{timestamp}"
+            
+        if unique_id in PROCESSED_MESSAGES:
             logger.info(f"Ignoring already processed message: {unique_id}")
             return jsonify({"status": "ignored", "reason": "Already processed"}), 200
         
         # Add message ID to processed set
-        if unique_id:
-            PROCESSED_MESSAGES.add(unique_id)
-            # Prevent set from growing too large
-            if len(PROCESSED_MESSAGES) > MAX_CACHE_SIZE:
-                # Remove oldest entries (approximation by just clearing half the set)
-                logger.info(f"Clearing message cache ({len(PROCESSED_MESSAGES)} items)")
-                PROCESSED_MESSAGES.clear()
+        PROCESSED_MESSAGES.add(unique_id)
+        # Prevent set from growing too large
+        if len(PROCESSED_MESSAGES) > MAX_CACHE_SIZE:
+            # Remove oldest entries (approximation by just clearing half the set)
+            logger.info(f"Clearing message cache ({len(PROCESSED_MESSAGES)} items)")
+            PROCESSED_MESSAGES.clear()
 
         # Extract message content (handle various possible field names)
-        for field in ['text', 'body', 'message']:
+        for field in ['text', 'body', 'message', 'messageText', 'caption']:
             if field in data:
-                incoming_msg = data.get(field, '').strip().lower()
-                if incoming_msg:
-                    break
+                if isinstance(data.get(field), str):
+                    incoming_msg = data.get(field, '').strip().lower()
+                    if incoming_msg:
+                        break
+                elif isinstance(data.get(field), dict) and 'body' in data.get(field):
+                    incoming_msg = data.get(field).get('body', '').strip().lower()
+                    if incoming_msg:
+                        break
 
         # Extract sender ID (handle various possible field names)
-        for field in ['waId', 'from', 'sender', 'contactId']:
+        for field in ['waId', 'from', 'sender', 'contactId', 'senderPhone', 'senderName', 'senderId']:
             if field in data:
                 sender = data.get(field, '')
                 if sender:
                     break
+                    
+        # If still no sender, check nested objects
+        if not sender and 'conversation' in data and isinstance(data['conversation'], dict):
+            sender = data['conversation'].get('id', '')
+
+        # Ensure sender is not our bot's WhatsApp number 
+        if WHATSAPP_NUMBER and sender == WHATSAPP_NUMBER:
+            logger.info(f"Ignoring message from our own number")
+            return jsonify({"status": "ignored", "reason": "Message from our own number"}), 200
 
         # Check for group ID (handle various possible field names)
-        for field in ['groupId', 'chatId', 'group_id']:
+        for field in ['groupId', 'chatId', 'group_id', 'groupName']:
             if field in data:
                 group_id = data.get(field)
                 if group_id:
@@ -489,22 +528,24 @@ def webhook():
 
         logger.info(f"Extracted data: Message: '{incoming_msg}', Sender: '{sender}', Group: '{group_id}'")
 
-        # Only process if we have a message and sender
+        # Only process if we have both a message and sender
         if incoming_msg and sender:
+            logger.info(f"Processing user message from {sender}: '{incoming_msg}'")
+            
             # Process commands
             response_message = process_command(incoming_msg, sender, group_id)
 
-            # Send response via WATI API
+            # Send response via WATI API (only once)
             if response_message:
                 result = send_wati_message(sender, response_message)
                 if result.get("success"):
                     logger.info(f"Successfully sent response to {sender}")
                 else:
-                    logger.error(f"Failed to send response to {sender}")
+                    logger.error(f"Failed to send response to {sender}: {result.get('error')}")
 
             return jsonify({"status": "success", "message": "Processed message"}), 200
         else:
-            # If we don't have a message but the request came in, acknowledge it anyway
+            # If we don't have a message or sender, just acknowledge the webhook
             logger.warning("Valid webhook request but could not extract message data")
             return jsonify({"status": "acknowledged", "message": "Request received but no valid message data found"}), 200
 
