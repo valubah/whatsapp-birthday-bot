@@ -28,7 +28,6 @@ WATI_ACCOUNT_ID = os.environ.get('WATI_ACCOUNT_ID', '441044')
 WHATSAPP_NUMBER = os.environ.get('WHATSAPP_NUMBER')
 OWNER_PHONE = os.environ.get('OWNER_PHONE', '')
 
-
 # Add this near the top of the file, after the other global variables
 # Cache to track processed message IDs to prevent duplicate processing
 PROCESSED_MESSAGES = set()
@@ -56,10 +55,18 @@ def load_birthdays():
             with open(DATA_FILE, 'r') as f:
                 return json.load(f)
         else:
-            return {"personal": {}, "groups": {}}
+            # Updated structure with users dictionary to store user-specific birthdays
+            return {
+                "users": {},  # User-specific personal birthdays
+                "groups": {}  # Group birthdays (accessible to group members)
+            }
     except Exception as e:
         logger.error(f"Error loading birthdays: {e}")
-        return {"personal": {}, "groups": {}}
+        # Updated structure with users dictionary
+        return {
+            "users": {},
+            "groups": {}
+        }
 
 def save_birthdays(data):
     """Save birthdays to JSON file"""
@@ -105,31 +112,32 @@ def check_upcoming_birthdays(days_ahead=1):
         today = datetime.now().date()
         upcoming = []
 
-        # Check personal birthdays
-        for name, info in birthdays["personal"].items():
-            bday = datetime.strptime(info["birthday"], "%d-%m-%Y").date().replace(year=today.year)
-            # If birthday has passed this year, check for next year
+        # Function to calculate next birthday date
+        def get_next_birthday(date_str):
+            bday = datetime.strptime(date_str, "%d-%m-%Y").date().replace(year=today.year)
             if bday < today:
                 bday = bday.replace(year=today.year + 1)
+            return bday
 
-            days_until = (bday - today).days
+        # Check personal birthdays for all users (for admin notifications only)
+        for user_id, user_data in birthdays["users"].items():
+            for name, info in user_data.get("birthdays", {}).items():
+                bday = get_next_birthday(info["birthday"])
+                days_until = (bday - today).days
 
-            if days_until == days_ahead:
-                upcoming.append({
-                    "name": name,
-                    "birthday": info["birthday"],
-                    "phone": info["phone"],
-                    "days_until": days_until
-                })
+                if days_until == days_ahead:
+                    upcoming.append({
+                        "name": name,
+                        "birthday": info["birthday"],
+                        "phone": user_id,  # The user who added this birthday
+                        "owner_phone": user_id,  # The owner of this birthday entry
+                        "days_until": days_until
+                    })
 
         # Check group birthdays
         for group_id, group_info in birthdays["groups"].items():
             for name, info in group_info["members"].items():
-                bday = datetime.strptime(info["birthday"], "%d-%m-%Y").date().replace(year=today.year)
-                # If birthday has passed this year, check for next year
-                if bday < today:
-                    bday = bday.replace(year=today.year + 1)
-
+                bday = get_next_birthday(info["birthday"])
                 days_until = (bday - today).days
 
                 if days_until == days_ahead:
@@ -348,10 +356,14 @@ def daily_check():
                 message = f"🎂 Reminder: {person['name']}'s birthday is tomorrow! 🎉\n\n{get_random_ad()}"
                 send_wati_message(group_info["phone"], message)
             else:
-                # Send to individual
+                # Send personal birthday reminders to the user who added them
+                user_id = person["owner_phone"]
                 message = f"🎂 Birthday Reminder: {person['name']}'s birthday is tomorrow! 🎉\n\n{get_random_ad()}"
-                if OWNER_PHONE:
-                    send_wati_message(OWNER_PHONE, message)
+                send_wati_message(user_id, message)
+                
+                # Also notify system owner if configured
+                if OWNER_PHONE and OWNER_PHONE != user_id:
+                    send_wati_message(OWNER_PHONE, f"System notification: {person['name']}'s birthday tomorrow (added by {user_id})")
 
         logger.info(f"Daily check completed, found {len(upcoming)} upcoming birthdays")
     except Exception as e:
@@ -359,8 +371,6 @@ def daily_check():
 
 # Schedule daily check at 9 AM
 schedule.every().day.at("09:00").do(daily_check)
-
-
 
 def run_scheduler():
     """Run the scheduler in a separate thread"""
@@ -572,9 +582,11 @@ def process_command(incoming_msg, sender, group_id=None):
 🤖 *Whatsapp Birthday Alert Commands*:
 - *add <name> <DD-MM-YYYY>*: Add a birthday
 - *remove <name>*: Remove a birthday
-- *list*: List all birthdays
-- *next*: Show next birthday
+- *list*: List your birthdays
+- *next*: Show your next birthday reminder
 - *help*: Show this message
+
+Your birthdays are private and only visible to you!
 
 {get_random_ad()}
 """
@@ -606,13 +618,21 @@ def process_command(incoming_msg, sender, group_id=None):
                         }
                         message = f"✅ Added {name}'s birthday ({formatted_date}) to the group!\n\n{get_random_ad()}"
                     else:
-                        # Add to personal list
-                        birthdays["personal"][name] = {
+                        # Add to user's personal list
+                        if sender not in birthdays["users"]:
+                            birthdays["users"][sender] = {
+                                "birthdays": {},
+                                "last_activity": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            }
+                        
+                        if "birthdays" not in birthdays["users"][sender]:
+                            birthdays["users"][sender]["birthdays"] = {}
+                            
+                        birthdays["users"][sender]["birthdays"][name] = {
                             "birthday": formatted_date,
-                            "phone": sender,
                             "added_on": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         }
-                        message = f"✅ Added {name}'s birthday ({formatted_date}) to your list!\n\n{get_random_ad()}"
+                        message = f"✅ Added {name}'s birthday ({formatted_date}) to your private list!\n\n{get_random_ad()}"
 
                     save_birthdays(birthdays)
                     return message
@@ -634,10 +654,11 @@ def process_command(incoming_msg, sender, group_id=None):
                 else:
                     return f"❌ Error: {name} not found in this group's birthday list.\n\n{get_random_ad()}"
             else:
-                if name in birthdays["personal"]:
-                    del birthdays["personal"][name]
+                # Check user's personal birthdays
+                if sender in birthdays["users"] and name in birthdays["users"][sender].get("birthdays", {}):
+                    del birthdays["users"][sender]["birthdays"][name]
                     save_birthdays(birthdays)
-                    return f"✅ Removed {name}'s birthday from your list!\n\n{get_random_ad()}"
+                    return f"✅ Removed {name}'s birthday from your private list!\n\n{get_random_ad()}"
                 else:
                     return f"❌ Error: {name} not found in your birthday list.\n\n{get_random_ad()}"
 
@@ -656,11 +677,13 @@ def process_command(incoming_msg, sender, group_id=None):
                     message += f"\n{get_random_ad()}"
                     return message
             else:
-                if not birthdays["personal"]:
-                    return f"📅 No birthdays saved yet.\n\n{get_random_ad()}"
+                # Show only user's personal birthdays
+                if sender not in birthdays["users"] or not birthdays["users"][sender].get("birthdays"):
+                    return f"📅 You haven't saved any birthdays yet.\n\n{get_random_ad()}"
                 else:
-                    message = "📅 *Your Birthday List*:\n"
-                    for name, info in sorted(birthdays["personal"].items()):
+                    message = "📅 *Your Private Birthday List*:\n"
+                    user_birthdays = birthdays["users"][sender].get("birthdays", {})
+                    for name, info in sorted(user_birthdays.items()):
                         date_obj = datetime.strptime(info["birthday"], "%d-%m-%Y")
                         message += f"- {name}: {date_obj.strftime('%d %B')}\n"
                     message += f"\n{get_random_ad()}"
@@ -684,40 +707,50 @@ def process_command(incoming_msg, sender, group_id=None):
                     days = days_until_birthday(info["birthday"])
                     next_birthdays.append((name, info["birthday"], days))
             else:
-                for name, info in birthdays["personal"].items():
-                    days = days_until_birthday(info["birthday"])
-                    next_birthdays.append((name, info["birthday"], days))
+                # Only check user's personal birthday
 
+                 if sender in birthdays["users"] and "birthdays" in birthdays["users"][sender]:
+                    for name, info in birthdays["users"][sender]["birthdays"].items():
+                        days = days_until_birthday(info["birthday"])
+                        next_birthdays.append((name, info["birthday"], days))
+
+            # Check if we found any birthdays
             if not next_birthdays:
-                return f"📅 No birthdays saved yet.\n\n{get_random_ad()}"
+                return f"📅 No birthdays found in your list.\n\n{get_random_ad()}"
+                
+            # Sort by days until
+            next_birthdays.sort(key=lambda x: x[2])
+            
+            # Create response message
+            if group_id:
+                message = "📅 *Upcoming Group Birthdays*:\n"
             else:
-                next_birthdays.sort(key=lambda x: x[2])  # Sort by days until birthday
-                next_person = next_birthdays[0]
-
-                if next_person[2] == 0:
-                    return f"🎂 Today is {next_person[0]}'s birthday! 🎉\n\n{get_random_ad()}"
-                elif next_person[2] == 1:
-                    return f"🎂 Tomorrow is {next_person[0]}'s birthday! 🎉\n\n{get_random_ad()}"
+                message = "📅 *Upcoming Birthdays*:\n"
+                
+            # Show the next 5 birthdays
+            for i, (name, bd_date, days) in enumerate(next_birthdays[:5]):
+                date_obj = datetime.strptime(bd_date, "%d-%m-%Y")
+                if days == 0:
+                    message += f"- {name}: *TODAY!* 🎂🎉\n"
+                elif days == 1:
+                    message += f"- {name}: *TOMORROW!* ⏰\n"
                 else:
-                    bday = datetime.strptime(next_person[1], "%d-%m-%Y")
-                    return f"🎂 Next birthday: {next_person[0]} on {bday.strftime('%d %B')} (in {next_person[2]} days)\n\n{get_random_ad()}"
+                    message += f"- {name}: {date_obj.strftime('%d %B')} (in {days} days)\n"
+                    
+            message += f"\n{get_random_ad()}"
+            return message
 
+        # If the message doesn't match any command, ignore it (or you could add a default response)
         else:
-            # Default welcome message
-            return f"""
-👋 *Welcome to Whatsapp Birthday Alert Messenger!*
-
-I'll help you remember birthdays. Try these commands:
-- *add <name> <DD-MM-YYYY>* e.g add valentine 25-12-1990
-- *list*
-- *help* (for more commands)
-
-{get_random_ad()}
-"""
+            # If it's the first message from this user, send help
+            birthdays = load_birthdays()
+            if sender not in birthdays["users"]:
+                return f"👋 Welcome to Birthday Alert Bot!\n\nType *help* to see available commands.\n\n{get_random_ad()}"
+            return None
 
     except Exception as e:
         logger.error(f"Error processing command: {e}")
-        return f"❌ An error occurred: {str(e)}. Please try again.\n\n{get_random_ad()}"
+        return f"❌ Error processing your request. Please try again or type *help*.\n\n{get_random_ad()}"
 
 
 
