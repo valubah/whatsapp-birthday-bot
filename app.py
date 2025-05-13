@@ -28,6 +28,12 @@ WATI_ACCOUNT_ID = os.environ.get('WATI_ACCOUNT_ID', '441044')
 WHATSAPP_NUMBER = os.environ.get('WHATSAPP_NUMBER')
 OWNER_PHONE = os.environ.get('OWNER_PHONE', '')
 
+
+# Add this near the top of the file, after the other global variables
+# Cache to track processed message IDs to prevent duplicate processing
+PROCESSED_MESSAGES = set()
+MAX_CACHE_SIZE = 1000
+
 # Storage for birthdays (In a production environment, use a database)
 DATA_FILE = "birthdays.json"
 
@@ -375,6 +381,14 @@ def health():
     """Health check route"""
     return jsonify({"status": "ok", "timestamp": datetime.now().isoformat()})
 
+
+
+
+
+
+
+
+
 @app.route('/webhook', methods=['POST', 'GET'])
 def webhook():
     """Handle incoming WhatsApp messages from WATI"""
@@ -428,6 +442,29 @@ def webhook():
         incoming_msg = ""
         sender = ""
         group_id = None
+        message_id = data.get('id', '')
+        whatsapp_message_id = data.get('whatsappMessageId', '')
+        event_type = data.get('eventType', '')
+
+        # If this is a message sent by the bot, ignore it to prevent loops
+        if event_type == 'sessionMessageSent_v2' or data.get('owner') is True:
+            logger.info(f"Ignoring message sent by bot (eventType: {event_type})")
+            return jsonify({"status": "ignored", "reason": "Bot's own message"}), 200
+
+        # Check if we've already processed this message
+        unique_id = message_id or whatsapp_message_id
+        if unique_id and unique_id in PROCESSED_MESSAGES:
+            logger.info(f"Ignoring already processed message: {unique_id}")
+            return jsonify({"status": "ignored", "reason": "Already processed"}), 200
+        
+        # Add message ID to processed set
+        if unique_id:
+            PROCESSED_MESSAGES.add(unique_id)
+            # Prevent set from growing too large
+            if len(PROCESSED_MESSAGES) > MAX_CACHE_SIZE:
+                # Remove oldest entries (approximation by just clearing half the set)
+                logger.info(f"Clearing message cache ({len(PROCESSED_MESSAGES)} items)")
+                PROCESSED_MESSAGES.clear()
 
         # Extract message content (handle various possible field names)
         for field in ['text', 'body', 'message']:
@@ -452,16 +489,6 @@ def webhook():
 
         logger.info(f"Extracted data: Message: '{incoming_msg}', Sender: '{sender}', Group: '{group_id}'")
 
-        # Special handling for empty messages - just send help message
-        if not incoming_msg and sender:
-            response_message = process_command("help", sender, group_id)
-            success = send_wati_message(sender, response_message)
-            if success:
-                logger.info(f"Sent help message to {sender} for empty message")
-            else:
-                logger.error(f"Failed to send help message to {sender}")
-            return jsonify({"status": "success", "message": "Sent help message for empty request"}), 200
-
         # Only process if we have a message and sender
         if incoming_msg and sender:
             # Process commands
@@ -485,6 +512,13 @@ def webhook():
         logger.error(f"Error in webhook: {str(e)}", exc_info=True)
         # Always return a success to stop WATI from retrying
         return jsonify({"status": "error", "message": str(e)}), 200
+
+
+
+
+
+
+
 
 def process_command(incoming_msg, sender, group_id=None):
     """Process commands and return appropriate response message"""
