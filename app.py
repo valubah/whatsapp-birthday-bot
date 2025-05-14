@@ -102,19 +102,21 @@ def format_birthday(date_obj):
 
 
 
+
+
 # Add API endpoint to view stats
 @app.route('/stats', methods=['GET'])
 def stats():
     """View simple stats about the bot"""
     try:
         birthdays = load_birthdays()
-        user_count = len(birthdays["users"])
+        user_count = len(birthdays["personal"])
         group_count = len(birthdays["groups"])
         
         # Count total birthdays
         personal_birthdays = 0
-        for user_id, user_data in birthdays["users"].items():
-            personal_birthdays += len(user_data.get("birthdays", {}))
+        for user_id, user_data in birthdays["personal"].items():
+            personal_birthdays += len(user_data)
             
         group_birthdays = 0
         for group_id, group_data in birthdays["groups"].items():
@@ -138,6 +140,14 @@ def stats():
     except Exception as e:
         logger.error(f"Error generating stats: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+
+
+
+
+
+
 
 
 def check_upcoming_birthdays(days_ahead=1):
