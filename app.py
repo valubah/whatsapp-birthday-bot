@@ -23,10 +23,14 @@ app = Flask(__name__)
 
 # Load environment variables for WATI
 WATI_ACCESS_TOKEN = os.environ.get('WATI_ACCESS_TOKEN')
+WATI_API_KEY = os.environ.get('WATI_API_KEY')  # Add this new line
 WATI_API_ENDPOINT = os.environ.get('WATI_API_ENDPOINT', 'https://live-mt-server.wati.io')
 WATI_ACCOUNT_ID = os.environ.get('WATI_ACCOUNT_ID', '441044')
 WHATSAPP_NUMBER = os.environ.get('WHATSAPP_NUMBER')
 OWNER_PHONE = os.environ.get('OWNER_PHONE', '')
+
+
+
 
 
 # Add this near the top of the file, after the other global variables
@@ -251,12 +255,347 @@ def migrate_data_for_privacy():
 
 
 
+# Add a test endpoint to verify WATI API connection
+@app.route('/test_wati', methods=['GET'])
+def test_wati():
+    """Test endpoint to verify WATI API connection and authentication"""
+    try:
+        # Get test phone number from query param or use owner phone
+        test_phone = request.args.get('phone', OWNER_PHONE)
+        
+        if not test_phone:
+            return jsonify({
+                "status": "error", 
+                "message": "No test phone number provided. Add ?phone=1234567890 to URL or set OWNER_PHONE env variable."
+            }), 400
+            
+        # First check if we need to refresh the token
+        if not WATI_ACCESS_TOKEN:
+            refresh_result = refresh_wati_token()
+            token_status = "refreshed successfully" if refresh_result else "refresh failed"
+        else:
+            token_status = "using existing token"
+            
+        # Send a test message
+        message = f"🤖 Test message from Birthday Bot at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        result = send_wati_message(test_phone, message)
+        
+        # Return comprehensive diagnostics
+        response = {
+            "status": "success" if result.get("success") else "error",
+            "token_status": token_status,
+            "wati_endpoint": WATI_API_ENDPOINT,
+            "account_id": WATI_ACCOUNT_ID,
+            "has_api_key": bool(WATI_API_KEY),
+            "test_phone": test_phone,
+            "message_result": result
+        }
+        
+        return jsonify(response)
+    except Exception as e:
+        logger.error(f"Error in test_wati endpoint: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 
 
 
+
+# Function to fix WATI authentication and token refresh
+def refresh_wati_token():
+    """
+    Refresh the WATI access token if it's expired.
+    Returns True if successful, False otherwise.
+    """
+    global WATI_ACCESS_TOKEN
+    
+    try:
+        # Get credentials from environment
+        wati_api_key = os.environ.get('WATI_API_KEY')
+        wati_account_id = os.environ.get('WATI_ACCOUNT_ID', '441044')
+        wati_api_endpoint = os.environ.get('WATI_API_ENDPOINT', 'https://live-mt-server.wati.io')
+        
+        # Check if API key is available
+        if not wati_api_key:
+            logger.error("Cannot refresh token: WATI_API_KEY environment variable is not set")
+            return False
+            
+        # Build authentication endpoint
+        auth_endpoint = f"{wati_api_endpoint.rstrip('/')}/api/v1/auth/token"
+        
+        # Prepare headers and data
+        headers = {
+            "Content-Type": "application/json"
+        }
+        
+        data = {
+            "apikey": wati_api_key,
+            "accountid": wati_account_id
+        }
+        
+        # Make authentication request
+        logger.info("Attempting to refresh WATI access token")
+        response = requests.post(
+            auth_endpoint,
+            headers=headers,
+            json=data,
+            timeout=20
+        )
+        
+        # Process response
+        if response.status_code == 200:
+            try:
+                token_data = response.json()
+                if "token" in token_data:
+                    WATI_ACCESS_TOKEN = token_data["token"]
+                    logger.info("Successfully refreshed WATI access token")
+                    return True
+                else:
+                    logger.error(f"Token not found in response: {token_data}")
+                    return False
+            except Exception as e:
+                logger.error(f"Error parsing token response: {e}")
+                return False
+        else:
+            logger.error(f"Failed to refresh token. Status code: {response.status_code}, Response: {response.text}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Error refreshing WATI token: {e}")
+        return False
+
+# Update send_wati_message function to handle authentication errors
 def send_wati_message(recipient, message, message_type="text", attachments=None, timeout=20):
+    """
+    Sends a WhatsApp message using the WATI API with token refresh capability.
+
+    Args:
+        recipient (str): The recipient's phone number (with or without '+' prefix)
+        message (str): The message content to send
+        message_type (str, optional): The type of message - "text" (default), "template", "image", etc.
+        attachments (dict, optional): Any attachments to include with the message
+        timeout (int, optional): Request timeout in seconds (default: 20)
+
+    Returns:
+        dict: Response information with keys:
+        - success (bool): Whether the message was sent successfully
+        - message_id (str, optional): The ID of the sent message if successful
+        - error (str, optional): Error message if unsuccessful
+    """
+    global WATI_ACCESS_TOKEN
+    
+    try:
+        # --- Initial Checks ---
+        if not WATI_ACCESS_TOKEN:
+            logger.warning("WATI_ACCESS_TOKEN not set, attempting to refresh")
+            if not refresh_wati_token():
+                return {"success": False, "error": "Failed to obtain WATI_ACCESS_TOKEN"}
+                
+        if not WATI_API_ENDPOINT:
+            logger.error("WATI_API_ENDPOINT is not configured.")
+            return {"success": False, "error": "WATI_API_ENDPOINT not configured"}
+        if not recipient:
+            logger.error("Recipient phone number is empty.")
+            return {"success": False, "error": "Empty recipient phone number"}
+        if not message and message_type == "text":
+            logger.error("Message content is empty.")
+            return {"success": False, "error": "Empty message content"}
+
+        # --- Format phone number ---
+        formatted_recipient = recipient
+        if isinstance(recipient, str) and recipient.startswith('+'):
+            formatted_recipient = recipient[1:]
+
+        # --- Prepare API endpoint ---
+        base_api_url = WATI_API_ENDPOINT.rstrip('/') + '/'  # Ensure trailing slash
+
+        # Determine which endpoint to use based on message type
+        if message_type == "text":
+            relative_path = f"api/v1/sendSessionMessage/{formatted_recipient}"
+        elif message_type == "template":
+            relative_path = f"api/v1/sendTemplateMessage/{formatted_recipient}"
+        elif message_type == "image":
+            relative_path = f"api/v1/sendSessionMessage/{formatted_recipient}/image"
+        elif message_type == "file":
+            relative_path = f"api/v1/sendSessionMessage/{formatted_recipient}/file"
+        else:
+            # Default to text message
+            relative_path = f"api/v1/sendSessionMessage/{formatted_recipient}"
+
+        target_endpoint = urljoin(base_api_url, relative_path)
+
+        # --- Prepare headers and parameters ---
+        headers = {
+            "Authorization": f"Bearer {WATI_ACCESS_TOKEN}"
+        }
+
+        # Prepare request data based on message type
+        params = {}
+        data = None
+        json_data = None
+
+        if message_type == "text":
+            # For text messages, use query parameter
+            params = {"messageText": message}
+        elif message_type == "template":
+            # For template messages, use JSON body
+            json_data = {
+                "template_name": message,
+                "broadcast_name": f"broadcast_{int(time.time())}",
+                "parameters": attachments or []
+            }
+        elif message_type in ["image", "file"]:
+            # For media messages, use JSON body with URL
+            if attachments and "url" in attachments:
+                json_data = {
+                    "url": attachments["url"],
+                    "caption": message
+                }
+            else:
+                return {"success": False, "error": f"URL required for {message_type} message type"}
+
+        # --- Make the API request ---
+        logger.info(f"Sending {message_type} message to {formatted_recipient}")
+
+        # Try sending the message, with one retry attempt for 401 errors
+        for attempt in range(2):
+            try:
+                if json_data:
+                    headers["Content-Type"] = "application/json"
+                    response = requests.post(
+                        target_endpoint,
+                        headers=headers,
+                        params=params,
+                        json=json_data,
+                        timeout=timeout
+                    )
+                else:
+                    response = requests.post(
+                        target_endpoint,
+                        headers=headers,
+                        params=params,
+                        data=data,
+                        timeout=timeout
+                    )
+
+                # --- Check for authentication error ---
+                if response.status_code == 401 and attempt == 0:
+                    logger.warning("Received 401 error, attempting token refresh")
+                    if refresh_wati_token():
+                        # Update header with new token for retry
+                        headers["Authorization"] = f"Bearer {WATI_ACCESS_TOKEN}"
+                        continue  # Try again with refreshed token
+                    else:
+                        logger.error("Token refresh failed, cannot retry sending message")
+                        return {"success": False, "error": "Authentication failed and token refresh unsuccessful"}
+
+                # --- Process the response ---
+                response_text = response.text if response.text and response.text.strip() else '(empty response body)'
+
+                if response.status_code in [200, 201, 202]:
+                    try:
+                        if not response.text.strip():
+                            logger.warning(f"Empty response body with status {response.status_code}")
+                            return {"success": True, "warning": "Empty response body"}
+
+                        data = response.json()
+                        if isinstance(data, dict):
+                            # Check for successful response patterns
+                            if (data.get("result") == "success" and data.get("ok") is True) or \
+                               (data.get("id") and data.get("status") in ["submitted", "sent", "OK", "queued", "success"]):
+
+                                # Extract message ID if available
+                                message_id = None
+                                if "message" in data and isinstance(data["message"], dict):
+                                    message_id = data["message"].get("whatsappMessageId") or data["message"].get("id")
+                                elif "id" in data:
+                                    message_id = data.get("id")
+
+                                logger.info(f"Message sent successfully to {formatted_recipient}" +
+                                            (f": ID {message_id}" if message_id else ""))
+
+                                return {
+                                    "success": True,
+                                    "message_id": message_id,
+                                    "response": data
+                                }
+                            elif data.get("result") is False or "fault" in data or "error" in data or data.get("status") == "error":
+                                error_msg = data.get("info") or data.get("error") or data.get("fault") or response_text
+                                logger.error(f"API error response: {error_msg}")
+                                return {"success": False, "error": error_msg, "response": data}
+                            else:
+                                logger.warning(f"Unclear API response: {response_text}")
+                                return {"success": True, "warning": "Unclear API response", "response": data}
+                    except ValueError:
+                        # Non-JSON response
+                        if response.status_code in [200, 201, 202]:
+                            logger.warning(f"Non-JSON response with success status code: {response_text}")
+                            return {"success": True, "warning": "Non-JSON response", "raw_response": response_text}
+                        else:
+                            logger.error(f"Non-JSON error response: {response_text}")
+                            return {"success": False, "error": f"Non-JSON response: {response_text}"}
+                else:
+                    # Handle error status codes
+                    error_msg = f"HTTP {response.status_code}: {response_text}"
+                    logger.error(error_msg)
+
+                    if response.status_code == 404:
+                        error_detail = "Endpoint not found. Check API URL and path."
+                    elif response.status_code == 400:
+                        error_detail = "Bad request. Check phone number format and parameters."
+                    elif response.status_code in [401, 403]:
+                        error_detail = "Authentication failure. Check your access token."
+                    else:
+                        error_detail = "Unknown error."
+
+                    # Don't retry for non-auth errors
+                    break
+            except requests.exceptions.Timeout:
+                timeout_msg = f"Request to WATI API timed out after {timeout}s"
+                logger.error(timeout_msg)
+                return {"success": False, "error": timeout_msg}
+            except requests.exceptions.RequestException as e:
+                error_msg = f"Request exception: {str(e)}"
+                logger.error(error_msg)
+                return {"success": False, "error": error_msg}
+
+        # If we reach here after attempts, return the last error
+        return {
+            "success": False,
+            "error": error_msg,
+            "error_detail": error_detail,
+            "status_code": response.status_code
+        }
+
+    except Exception as e:
+        error_msg = f"Unhandled exception: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return {"success": False, "error": error_msg}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def send_wati_messageold(recipient, message, message_type="text", attachments=None, timeout=20):
     """
     Sends a WhatsApp message using the WATI API.
 
