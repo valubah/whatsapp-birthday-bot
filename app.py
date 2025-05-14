@@ -48,8 +48,10 @@ DATA_FILE = "birthdays.json"
 ADVERTORIALS = [
     "🎁 *Play and Win Free Airtime!* Try Airtime Puzzle - Get free airtime anytime you play Airtime Puzzle. Available on Google Playstore. Download Airtime Puzzle now and start winning!",
     "🎂 *Planning a party?* CelebrationHub has everything you need for the perfect birthday celebration. Visit celebrationhub.com today!",
-    "🎈 *Play and Win Free Airtime!* Try Airtime Puzzle - Get free airtime anytime you play Airtime Puzzle. Available on Google Playstore. Download Airtime Puzzle now and start winning!",
+    "🎈 *Play and Win Free Airtime!* Try Puzzle Prize - Get free airtime anytime you play Puzzle Prize. Available on Google Playstore. Download Airtime Puzzle now and start winning!",
     "🎊 *Advertise your products and services to over 1 million users of our Whatsapp Birthday Reminder App. Broadcast your message accross our users. Send a message to +2349098058000. Very affordable",
+    "🎁 *Send Airtime and topUp Data WorldWide!* Download VALUBA Global Recharge and eSim - Never run out of airtime or data. With VALUBA, you can buy airtime or data for any country worldwide. Available on Google Playstore. Download VALUBA today!",
+
 ]
 
 def get_random_ad():
@@ -1024,12 +1026,6 @@ def webhook():
 
 
 
-
-
-
-
-
-
 def process_command(incoming_msg, sender, group_id=None):
     """Process commands and return appropriate response message"""
     try:
@@ -1038,20 +1034,17 @@ def process_command(incoming_msg, sender, group_id=None):
 
         if incoming_msg.startswith('help'):
             return f"""
+🤖 *Whatsapp Birthday Alert Commands*:
+- *add <name> <DD-MM-YYYY>*: Add a birthday e.g Add val 12-03-1994
+- *remove <name>*: Remove a birthday
+- *list*: List all birthdays
+- *next*: Show next birthday
+- *share*: Get a link to share this bot
+- *help*: Show this message
 
- 🤖 *Whatsapp Birthday Alert Commands*:
- - *add <name> <DD-MM-YYYY>*: Add a birthday
- - *remove <name>*: Remove a birthday
- - *list*: List all birthdays
- - *next*: Show next birthday
- - *share*: Get a link to share this bot
- - *help*: Show this message
-
- {get_random_ad()}
- {get_sharing_message()}
- """
-
-        
+{get_random_ad()}
+{get_sharing_message()}
+"""
 
         elif incoming_msg.startswith('add '):
             parts = incoming_msg[4:].split()
@@ -1079,8 +1072,6 @@ def process_command(incoming_msg, sender, group_id=None):
                             "added_by": sender
                         }
                         message = f"✅ Added {name}'s birthday ({formatted_date}) to the group!\n\n{get_random_ad()}{get_sharing_message()}"
-                       
-
                     else:
                         # Add to personal list - with improved privacy by using sender as key for personal birthdays
                         if sender not in birthdays["personal"]:
@@ -1096,9 +1087,9 @@ def process_command(incoming_msg, sender, group_id=None):
                     return message
 
                 except Exception as e:
-                    return f"❌ Error: {str(e)}\nPlease use format: add <name> <DD-MM-YYYY>\n\n{get_random_ad()}"
+                    return f"❌ Error: {str(e)}\nPlease use format: add <name> <DD-MM-YYYY>\n\n{get_random_ad()}{get_sharing_message()}"
             else:
-                return f"❌ Error: Please use format: add <name> <DD-MM-YYYY>\n\n{get_random_ad()}"
+                return f"❌ Error: Please use format: add <name> <DD-MM-YYYY>\n\n{get_random_ad()}{get_sharing_message()}"
 
         elif incoming_msg.startswith('remove '):
             name = incoming_msg[7:].strip()
@@ -1152,48 +1143,6 @@ def process_command(incoming_msg, sender, group_id=None):
                     message += f"\n{get_random_ad()}{get_sharing_message()}"
                     return message
 
-
-
-
-        # Add a new command handler for 'share' in the process_command function:
-elif incoming_msg == 'share':
-    sharing_link = get_sharing_link()
-    if sharing_link:
-        return f"""
-🔗 *Share Birthday Alert Bot*
-
-Forward this message to share with your friends and family:
-
-*Never forget a birthday again!* I'm using this WhatsApp Birthday Alert Bot. It sends you reminders before important birthdays and helps you keep track of them.
-
-👉 Add the bot: {sharing_link}
-
-Commands:
- 🤖 *Whatsapp Birthday Alert Commands*:
- - *add <name> <DD-MM-YYYY>*: Add a birthday
- - *remove <name>*: Remove a birthday
- - *list*: List all birthdays
- - *next*: Show next birthday
- - *share*: Get a link to share this bot
- - *help*: Show this message
-
- {get_random_ad()}
- {get_sharing_message()}
- 
-"""
-    else:
-        return f"""
-🔗 *Share Birthday Alert Bot*
-
-Forward my contact to your friends and family so they can use this bot too!
-
-*Never forget a birthday again!* This WhatsApp Birthday Alert Bot sends you reminders before important birthdays.
-
-{get_random_ad()}
-"""
-
-        
-
         elif incoming_msg == 'next':
             today = datetime.now().date()
             birthdays = load_birthdays()
@@ -1230,7 +1179,40 @@ Forward my contact to your friends and family so they can use this bot too!
                     return f"🎂 Tomorrow is {next_person[0]}'s birthday! 🎉\n\n{get_random_ad()}{get_sharing_message()}"
                 else:
                     bday = datetime.strptime(next_person[1], "%d-%m-%Y")
-                    return f"🎂 Next birthday: {next_person[0]} on {bday.strftime('%d %B')} (in {next_person[2]} days)\n\n{get_random_ad()}"
+                    return f"🎂 Next birthday: {next_person[0]} on {bday.strftime('%d %B')} (in {next_person[2]} days)\n\n{get_random_ad()}{get_sharing_message()}"
+
+        elif incoming_msg == 'share':
+            sharing_link = get_sharing_link()
+            if sharing_link:
+                return f"""
+🔗 *Share Birthday Alert Bot*
+
+Forward this message to share with your friends and family:
+
+*Never forget a birthday again!* I'm using this WhatsApp Birthday Alert Bot. It sends you reminders before important birthdays and helps you keep track of them.
+
+👉 Add the bot: {sharing_link}
+
+Commands:
+- *add <name> <DD-MM-YYYY>*: Add a birthday
+- *remove <name>*: Remove a birthday
+- *list*: List all birthdays
+- *next*: Show next birthday
+- *share*: Get a link to share this bot
+- *help*: Show this message
+
+{get_random_ad()}
+"""
+            else:
+                return f"""
+🔗 *Share Birthday Alert Bot*
+
+Forward my contact to your friends and family so they can use this bot too!
+
+*Never forget a birthday again!* This WhatsApp Birthday Alert Bot sends you reminders before important birthdays.
+
+{get_random_ad()}
+"""
 
         else:
             # Default welcome message
@@ -1238,21 +1220,27 @@ Forward my contact to your friends and family so they can use this bot too!
 👋 *Welcome to Whatsapp Birthday Alert Messenger!*
 
 I'll help you remember birthdays. Try these commands:
- 🤖 *Whatsapp Birthday Alert Commands*:
- - *add <name> <DD-MM-YYYY>*: Add a birthday e.g add val 25-12-1990
- - *remove <name>*: Remove a birthday e.g remove val
- - *list*: List all birthdays
- - *next*: Show next birthday
- - *share*: Get a link to share this bot
- - *help*: Show this message
+- *add <name> <DD-MM-YYYY>*: Add a birthday e.g Add val 12-03-1990
+- *remove <name>*: Remove a birthday e.g Remove val
+- *list*: List all birthdays
+- *next*: Show next birthday
+- *share*: Get a link to share this bot
+- *help*: Show this message
 
- {get_random_ad()}
- {get_sharing_message()}
- """
+{get_random_ad()}
+{get_sharing_message()}
+"""
 
     except Exception as e:
         logger.error(f"Error processing command: {e}")
-        return f"❌ An error occurred: {str(e)}. Please try again.\n\n{get_random_ad()}"
+        return f"❌ An error occurred: {str(e)}. Please try again.\n\n{get_random_ad()}{get_sharing_message()}"
+
+
+
+
+
+
+
 
 
 
