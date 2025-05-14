@@ -102,7 +102,42 @@ def format_birthday(date_obj):
 
 
 
-
+# Add API endpoint to view stats
+@app.route('/stats', methods=['GET'])
+def stats():
+    """View simple stats about the bot"""
+    try:
+        birthdays = load_birthdays()
+        user_count = len(birthdays["users"])
+        group_count = len(birthdays["groups"])
+        
+        # Count total birthdays
+        personal_birthdays = 0
+        for user_id, user_data in birthdays["users"].items():
+            personal_birthdays += len(user_data.get("birthdays", {}))
+            
+        group_birthdays = 0
+        for group_id, group_data in birthdays["groups"].items():
+            group_birthdays += len(group_data.get("members", {}))
+            
+        # Upcoming birthdays in next 7 days
+        upcoming_count = 0
+        for i in range(1, 8):
+            upcoming_count += len(check_upcoming_birthdays(days_ahead=i))
+            
+        return jsonify({
+            "status": "success",
+            "users": user_count,
+            "groups": group_count,
+            "personal_birthdays": personal_birthdays,
+            "group_birthdays": group_birthdays,
+            "upcoming_7_days": upcoming_count,
+            "scheduler_running": scheduler_thread is not None and scheduler_thread.is_alive(),
+            "cache_size": len(PROCESSED_MESSAGES)
+        }), 200
+    except Exception as e:
+        logger.error(f"Error generating stats: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 def check_upcoming_birthdays(days_ahead=1):
