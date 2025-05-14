@@ -6,6 +6,8 @@ import logging
 import threading
 import random
 import requests
+import urllib.parse
+
 from datetime import datetime, timedelta
 from urllib.parse import urljoin
 from flask import Flask, request, jsonify
@@ -28,6 +30,7 @@ WATI_API_ENDPOINT = os.environ.get('WATI_API_ENDPOINT', 'https://live-mt-server.
 WATI_ACCOUNT_ID = os.environ.get('WATI_ACCOUNT_ID', '441044')
 WHATSAPP_NUMBER = os.environ.get('WHATSAPP_NUMBER')
 OWNER_PHONE = os.environ.get('OWNER_PHONE', '')
+BOT_SHARE_URL = os.environ.get('BOT_SHARE_URL', 'https://wa.me/')  # Base URL for WhatsApp sharing
 
 
 
@@ -43,10 +46,10 @@ DATA_FILE = "birthdays.json"
 
 # Advertorial messages collection
 ADVERTORIALS = [
-    "🎁 *Send a perfect gift!* Try GiftWizard - personalized gift recommendations for any occasion. Use code BDAY10 for 10% off your first purchase.",
+    "🎁 *Play and Win Free Airtime!* Try Airtime Puzzle - Get free airtime anytime you play Airtime Puzzle. Available on Google Playstore. Download Airtime Puzzle now and start winning!",
     "🎂 *Planning a party?* CelebrationHub has everything you need for the perfect birthday celebration. Visit celebrationhub.com today!",
-    "🎈 *Make memories last!* Use PhotoMemories app to create stunning birthday photo albums. Download now and get 50 free prints.",
-    "🎊 *Need a last-minute gift?* E-GiftCards delivers instant gift cards from 500+ brands. Perfect for those forgotten birthdays!",
+    "🎈 *Play and Win Free Airtime!* Try Airtime Puzzle - Get free airtime anytime you play Airtime Puzzle. Available on Google Playstore. Download Airtime Puzzle now and start winning!",
+    "🎊 *Advertise your products and services to over 1 million users of our Whatsapp Birthday Reminder App. Broadcast your message accross our users. Send a message to +2349098058000. Very affordable",
 ]
 
 def get_random_ad():
@@ -108,6 +111,39 @@ def format_birthday(date_obj):
 
 
 
+
+
+
+# Add these new functions to enable sharing functionality
+def get_sharing_link():
+    """Generate WhatsApp sharing link for the bot"""
+    # Create a shareable link to the bot's WhatsApp number
+    if WHATSAPP_NUMBER:
+        # Remove the '+' if present and format the number for WhatsApp's wa.me service
+        formatted_number = WHATSAPP_NUMBER.replace('+', '')
+        # Add a pre-filled message that introduces the bot
+        message = urllib.parse.quote("I'm using this WhatsApp Birthday Alert Bot! It helps you remember all your important birthdays. Check it out!")
+        return f"https://wa.me/{formatted_number}?text={message}"
+    else:
+        return None
+
+def get_sharing_message():
+    """Get a message encouraging users to share the bot"""
+    sharing_link = get_sharing_link()
+    if sharing_link:
+        return f"\n\n📱 *Share this bot with friends!*\nUse this link: {sharing_link}"
+    else:
+        return "\n\n📱 *Share this bot with friends!*\nJust forward my contact to them on WhatsApp."
+
+# Add a new route for direct sharing/redirection
+@app.route('/share', methods=['GET'])
+def share_bot():
+    """Redirect to WhatsApp with a pre-filled message to share the bot"""
+    sharing_link = get_sharing_link()
+    if sharing_link:
+        return redirect(sharing_link)
+    else:
+        return "Bot sharing link unavailable. Please contact the administrator."
 
 
 
@@ -1002,15 +1038,20 @@ def process_command(incoming_msg, sender, group_id=None):
 
         if incoming_msg.startswith('help'):
             return f"""
-🤖 *Whatsapp Birthday Alert Commands*:
-- *add <name> <DD-MM-YYYY>*: Add a birthday
-- *remove <name>*: Remove a birthday
-- *list*: List all birthdays
-- *next*: Show next birthday
-- *help*: Show this message
 
-{get_random_ad()}
-"""
+ 🤖 *Whatsapp Birthday Alert Commands*:
+ - *add <name> <DD-MM-YYYY>*: Add a birthday
+ - *remove <name>*: Remove a birthday
+ - *list*: List all birthdays
+ - *next*: Show next birthday
+ - *share*: Get a link to share this bot
+ - *help*: Show this message
+
+ {get_random_ad()}
+ {get_sharing_message()}
+ """
+
+        
 
         elif incoming_msg.startswith('add '):
             parts = incoming_msg[4:].split()
@@ -1037,7 +1078,9 @@ def process_command(incoming_msg, sender, group_id=None):
                             "birthday": formatted_date,
                             "added_by": sender
                         }
-                        message = f"✅ Added {name}'s birthday ({formatted_date}) to the group!\n\n{get_random_ad()}"
+                        message = f"✅ Added {name}'s birthday ({formatted_date}) to the group!\n\n{get_random_ad()}{get_sharing_message()}"
+                       
+
                     else:
                         # Add to personal list - with improved privacy by using sender as key for personal birthdays
                         if sender not in birthdays["personal"]:
@@ -1047,7 +1090,7 @@ def process_command(incoming_msg, sender, group_id=None):
                             "birthday": formatted_date,
                             "added_on": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         }
-                        message = f"✅ Added {name}'s birthday ({formatted_date}) to your list!\n\n{get_random_ad()}"
+                        message = f"✅ Added {name}'s birthday ({formatted_date}) to your list!\n\n{get_random_ad()}{get_sharing_message()}"
 
                     save_birthdays(birthdays)
                     return message
@@ -1069,19 +1112,19 @@ def process_command(incoming_msg, sender, group_id=None):
                     if group_info["members"][name]["added_by"] == sender:
                         del group_info["members"][name]
                         save_birthdays(birthdays)
-                        return f"✅ Removed {name}'s birthday from the group!\n\n{get_random_ad()}"
+                        return f"✅ Removed {name}'s birthday from the group!\n\n{get_random_ad()}{get_sharing_message()}"
                     else:
-                        return f"❌ Error: You can only remove birthdays that you added to the group.\n\n{get_random_ad()}"
+                        return f"❌ Error: You can only remove birthdays that you added to the group.\n\n{get_random_ad()}{get_sharing_message()}"
                 else:
-                    return f"❌ Error: {name} not found in this group's birthday list.\n\n{get_random_ad()}"
+                    return f"❌ Error: {name} not found in this group's birthday list.\n\n{get_random_ad()}{get_sharing_message()}"
             else:
                 # For personal list - check in the user's personal list
                 if sender in birthdays["personal"] and name in birthdays["personal"][sender]:
                     del birthdays["personal"][sender][name]
                     save_birthdays(birthdays)
-                    return f"✅ Removed {name}'s birthday from your list!\n\n{get_random_ad()}"
+                    return f"✅ Removed {name}'s birthday from your list!\n\n{get_random_ad()}{get_sharing_message()}"
                 else:
-                    return f"❌ Error: {name} not found in your birthday list.\n\n{get_random_ad()}"
+                    return f"❌ Error: {name} not found in your birthday list.\n\n{get_random_ad()}{get_sharing_message()}"
 
         elif incoming_msg == 'list':
             birthdays = load_birthdays()
@@ -1089,25 +1132,67 @@ def process_command(incoming_msg, sender, group_id=None):
             if group_id and group_id in birthdays["groups"]:
                 group_info = birthdays["groups"][group_id]
                 if not group_info["members"]:
-                    return f"📅 No birthdays saved for this group yet.\n\n{get_random_ad()}"
+                    return f"📅 No birthdays saved for this group yet.\n\n{get_random_ad()}{get_sharing_message()}"
                 else:
                     message = "📅 *Group Birthday List*:\n"
                     for name, info in sorted(group_info["members"].items()):
                         date_obj = datetime.strptime(info["birthday"], "%d-%m-%Y")
                         message += f"- {name}: {date_obj.strftime('%d %B')}\n"
-                    message += f"\n{get_random_ad()}"
+                    message += f"\n{get_random_ad()}{get_sharing_message()}"
                     return message
             else:
                 # Only show the user's personal birthdays - privacy improvement
                 if sender not in birthdays["personal"] or not birthdays["personal"][sender]:
-                    return f"📅 No birthdays saved yet.\n\n{get_random_ad()}"
+                    return f"📅 No birthdays saved yet.\n\n{get_random_ad()}{get_sharing_message()}"
                 else:
                     message = "📅 *Your Birthday List*:\n"
                     for name, info in sorted(birthdays["personal"][sender].items()):
                         date_obj = datetime.strptime(info["birthday"], "%d-%m-%Y")
                         message += f"- {name}: {date_obj.strftime('%d %B')}\n"
-                    message += f"\n{get_random_ad()}"
+                    message += f"\n{get_random_ad()}{get_sharing_message()}"
                     return message
+
+
+
+
+        # Add a new command handler for 'share' in the process_command function:
+elif incoming_msg == 'share':
+    sharing_link = get_sharing_link()
+    if sharing_link:
+        return f"""
+🔗 *Share Birthday Alert Bot*
+
+Forward this message to share with your friends and family:
+
+*Never forget a birthday again!* I'm using this WhatsApp Birthday Alert Bot. It sends you reminders before important birthdays and helps you keep track of them.
+
+👉 Add the bot: {sharing_link}
+
+Commands:
+ 🤖 *Whatsapp Birthday Alert Commands*:
+ - *add <name> <DD-MM-YYYY>*: Add a birthday
+ - *remove <name>*: Remove a birthday
+ - *list*: List all birthdays
+ - *next*: Show next birthday
+ - *share*: Get a link to share this bot
+ - *help*: Show this message
+
+ {get_random_ad()}
+ {get_sharing_message()}
+ 
+"""
+    else:
+        return f"""
+🔗 *Share Birthday Alert Bot*
+
+Forward my contact to your friends and family so they can use this bot too!
+
+*Never forget a birthday again!* This WhatsApp Birthday Alert Bot sends you reminders before important birthdays.
+
+{get_random_ad()}
+"""
+
+        
 
         elif incoming_msg == 'next':
             today = datetime.now().date()
@@ -1134,15 +1219,15 @@ def process_command(incoming_msg, sender, group_id=None):
                         next_birthdays.append((name, info["birthday"], days))
 
             if not next_birthdays:
-                return f"📅 No birthdays saved yet.\n\n{get_random_ad()}"
+                return f"📅 No birthdays saved yet.\n\n{get_random_ad()}{get_sharing_message()}"
             else:
                 next_birthdays.sort(key=lambda x: x[2])  # Sort by days until birthday
                 next_person = next_birthdays[0]
 
                 if next_person[2] == 0:
-                    return f"🎂 Today is {next_person[0]}'s birthday! 🎉\n\n{get_random_ad()}"
+                    return f"🎂 Today is {next_person[0]}'s birthday! 🎉\n\n{get_random_ad()}{get_sharing_message()}"
                 elif next_person[2] == 1:
-                    return f"🎂 Tomorrow is {next_person[0]}'s birthday! 🎉\n\n{get_random_ad()}"
+                    return f"🎂 Tomorrow is {next_person[0]}'s birthday! 🎉\n\n{get_random_ad()}{get_sharing_message()}"
                 else:
                     bday = datetime.strptime(next_person[1], "%d-%m-%Y")
                     return f"🎂 Next birthday: {next_person[0]} on {bday.strftime('%d %B')} (in {next_person[2]} days)\n\n{get_random_ad()}"
@@ -1153,12 +1238,17 @@ def process_command(incoming_msg, sender, group_id=None):
 👋 *Welcome to Whatsapp Birthday Alert Messenger!*
 
 I'll help you remember birthdays. Try these commands:
-- *add <name> <DD-MM-YYYY>* e.g add valentine 25-12-1990
-- *list*
-- *help* (for more commands)
+ 🤖 *Whatsapp Birthday Alert Commands*:
+ - *add <name> <DD-MM-YYYY>*: Add a birthday e.g add val 25-12-1990
+ - *remove <name>*: Remove a birthday e.g remove val
+ - *list*: List all birthdays
+ - *next*: Show next birthday
+ - *share*: Get a link to share this bot
+ - *help*: Show this message
 
-{get_random_ad()}
-"""
+ {get_random_ad()}
+ {get_sharing_message()}
+ """
 
     except Exception as e:
         logger.error(f"Error processing command: {e}")
